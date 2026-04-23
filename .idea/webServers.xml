@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="507b5327-101f-4b07-ab6d-8b95ad90f3b1" name="一号服务器">
+        <fileTransfer rootFolder="/home/supermicro" accessType="SFTP" host="172.20.137.242" port="50003" sshConfigId="03975359-d3d0-40c3-8416-0270bb1d1f07" sshConfig="supermicro@172.20.137.242:50003 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

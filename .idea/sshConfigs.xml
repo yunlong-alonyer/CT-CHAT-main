@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="PASSWORD" host="172.20.137.242" id="03975359-d3d0-40c3-8416-0270bb1d1f07" port="50003" nameFormat="DESCRIPTIVE" username="supermicro" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</project>
