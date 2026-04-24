@@ -1,6 +1,6 @@
 deepspeed --master_port 12438 llava/train/train_mem.py \
     --deepspeed ./zero3.json \
-    --model_name_or_path meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --model_name_or_path ./pretrained_models/Qwen-VL \
     --version plain \
     --data_path path_to_train_json.json \
     --image_folder path_to_train_encodings/encodings/ \
