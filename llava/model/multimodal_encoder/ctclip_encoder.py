@@ -19,11 +19,14 @@ class CTClipVisionTower(nn.Module):
         # 注意：这里的 dim, depth, heads 必须与你训练 CT-CLIP 时的配置一致
         self.vision_tower = CTViT(
             dim=768,
-            depth=12,
-            heads=12,
-            image_size=240,  # 根据实际 CT-CLIP 的输入尺寸调整
+            codebook_size=8192,  # <-- 新增 (CTViT强制要求，通常VQGAN使用 8192 或 16384)
+            image_size=240,
             patch_size=16,
-            num_channels=1
+            temporal_patch_size=2,  # <-- 新增 (CTViT强制要求，表示在Z轴上多少个切片作为一个patch)
+            spatial_depth=12,  # <-- 修改：原先的 depth 替换为 spatial_depth
+            temporal_depth=4,  # <-- 新增 (CTViT强制要求，时间/Z轴的Transformer层数)
+            heads=12,
+            channels=1  # <-- 修改：原先的 num_channels 替换为 channels
         )
 
         self.hidden_size = 768  # 这是 CTViT 输出的维度，对应 config.mm_hidden_size
@@ -62,12 +65,24 @@ class CTClipVisionTower(nn.Module):
     def forward(self, images):
         # 接收形状: [Batch, Channel, Depth, Height, Width]
         with torch.no_grad():
-            # 获取 3D 特征，CTViT 输出维度通常为 [Batch, Sequence_Length, Hidden_Dim]
-            image_features = self.vision_tower(images)
+            # 1. 动态获取当前视觉塔的精度 (这里已被我们设置成了 FP32)
+            vt_dtype = next(self.vision_tower.parameters()).dtype
 
-            # 如果 CTViT 输出包含了 cls_token，通常需要截取掉第一个 token: image_features[:, 1:, :]
-            # 具体取决于 CTViT 的 forward 实现
-        return image_features
+            # 2. 将输入的图像强行对齐到视觉塔的精度 (FP16 -> FP32)
+            images_input = images.to(vt_dtype)
+
+            # 3. 提取特征 (在 FP32 下安全运行，不会报硬编码 float 错误)
+            image_features = self.vision_tower(
+                images_input,
+                return_encoded_tokens=True
+            )
+
+            if image_features.ndim == 5:
+                image_features = image_features.flatten(1, 3)
+
+                # 4. 将输出特征强行转回外部大模型的精度 (FP32 -> FP16)，无缝交接给 Projector
+            # fallback 取 images 的原精度即可 (即最开始传进来的 FP16)
+            return image_features.to(images.dtype)
 
     @property
     def dummy_feature(self):

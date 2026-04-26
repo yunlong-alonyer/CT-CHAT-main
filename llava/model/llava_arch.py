@@ -141,9 +141,13 @@ class LlavaMetaForCausalLM(ABC):
         return self.get_model().get_vision_tower()
 
     def encode_images(self, images):
-        #image_features = self.get_model().get_vision_tower()(images)
-        images = images.flatten(1, 3)
-        image_features = self.get_model().mm_projector(images)
+        # 1. 先让图像经过 CT-CLIP 视觉塔提取特征
+        # 这会返回我们在上一步修改过的 shape 为 [Batch, N, 768] 的特征
+        image_features = self.get_model().get_vision_tower()(images)
+
+        # 2. 将提取出的特征输入给适配器 (Projector) 进行对齐
+        image_features = self.get_model().mm_projector(image_features)
+
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
@@ -213,8 +217,8 @@ class LlavaMetaForCausalLM(ABC):
             # ==========================================================
             # 修改 3：将原代码的 IMAGE_TOKEN_INDEX 替换为 qwen_image_token_id
             # ==========================================================
-            num_images = (cur_input_ids == qwen_image_token_id).sum()
-
+            #num_images = (cur_input_ids == qwen_image_token_id).sum()
+            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx] if cur_image_idx < len(image_features) else None
                 # ==========================================================
@@ -231,7 +235,9 @@ class LlavaMetaForCausalLM(ABC):
                 cur_image_idx += 1
                 continue
 
-            image_token_indices = [-1] + torch.where(cur_input_ids == qwen_image_token_id)[0].tolist() + [
+            #image_token_indices = [-1] + torch.where(cur_input_ids == qwen_image_token_id)[0].tolist() + [
+            #    cur_input_ids.shape[0]]
+            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [
                 cur_input_ids.shape[0]]
             cur_input_ids_noim = []
             cur_labels = labels[batch_idx]

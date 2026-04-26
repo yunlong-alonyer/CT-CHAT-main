@@ -2,36 +2,68 @@ import torch
 import torch.nn as nn
 from typing import List, Optional, Tuple, Union
 
-# 引入 Qwen3-VL 官方模型类
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers import Qwen3VLForConditionalGeneration
-
-# 引入 LLaVA 的多模态架构基类
 from llava.model.llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
+
+# =========================================================================
+# 1. 动态导入 Qwen3_5ForConditionalGeneration
+# 因为 Qwen3.5 是非常新的模型 (transformers_version: 4.57.0.dev0)，
+# 原生 transformers 可能还不包含它。如果直接 import 报错，你需要从本地
+# pretrained_models/Qwen3.5-9B/modeling_qwen3_5.py 中导入。
+# =========================================================================
+try:
+    from transformers import Qwen3_5ForConditionalGeneration
+except ImportError:
+    import sys
+    import os
+
+    # 假设你的 Qwen3.5 权重在 pretrained_models/Qwen3.5-9B 下
+    sys.path.append(os.path.abspath("../../../pretrained_models/Qwen-VL"))
+    try:
+        from modeling_qwen3_5 import Qwen3_5ForConditionalGeneration
+    except ImportError:
+        print(
+            "[Error] 无法找到 Qwen3_5ForConditionalGeneration 类，请确保 transformers 为最新版或包含本地 modeling_qwen3_5.py")
 
 
 class LlavaQwenConfig(AutoConfig):
     model_type = "llava_qwen"
 
 
-# 多重继承：继承 Qwen3VL 的底层逻辑，同时混入 LLaVA 的多模态处理方法
-class LlavaQwenForCausalLM(Qwen3VLForConditionalGeneration, LlavaMetaForCausalLM):
+# 2. 多重继承：继承正确的 Qwen3_5 基类
+class LlavaQwenForCausalLM(Qwen3_5ForConditionalGeneration, LlavaMetaForCausalLM):
     config_class = LlavaQwenConfig
 
     def __init__(self, config):
-        # 1. 初始化 Qwen3-VL 原生模型
-        super(Qwen3VLForConditionalGeneration, self).__init__(config)
+        # 初始化 Qwen3.5 原生模型
+        super().__init__(config)
 
-        # 2. 对齐 LLaVA 与 Qwen3 的特殊 Token
-        # 根据你的 config 文件，Qwen3-VL 使用 151655 作为 image_token_id
-        self.config.image_token_id = getattr(config, 'image_token_id', 151655)
+        # 3. 对齐 LLaVA 与 Qwen3.5 的特殊 Token
+        # 根据 config.json，image_token_id 为 248056
+        self.config.image_token_id = getattr(config, 'image_token_id', 248056)
 
-        # LLaVA 架构在初始化时，会自动通过 builder.py 往 self.get_model() 中
-        # 挂载 vision_tower (CT编码器) 和 mm_projector (你的 AttentionalPooler)
+        # 4. 对齐隐藏层维度 (极其重要)
+        # Qwen3.5 将 LLM 的参数放在了 text_config 里。
+        # LLaVA 的 Projector 需要读取 self.config.hidden_size 来确定输出维度 (4096)
+        if hasattr(config, 'text_config'):
+            self.config.hidden_size = config.text_config.hidden_size
+        else:
+            self.config.hidden_size = getattr(config, 'hidden_size', 4096)
+
+        # 初始化时 builder 会挂载 vision_tower 和 mm_projector
 
     def get_model(self):
-        # LLaVA 的基类需要通过这个方法获取模型主体，以便挂载多模态模块
+        # LLaVA 架构需要通过这里获取底座模型进行特征融合
         return self
+
+
+    def get_vision_tower(self):
+        # 显式获取挂载在模型上的 vision_tower，打破递归循环
+        vision_tower = getattr(self, 'vision_tower', None)
+        if type(vision_tower) is list:
+            vision_tower = vision_tower[0]
+        return vision_tower
+
 
     def forward(
             self,
@@ -49,9 +81,8 @@ class LlavaQwenForCausalLM(Qwen3VLForConditionalGeneration, LlavaMetaForCausalLM
             **kwargs,
     ):
         # ==========================================================
-        # 核心“劫持”逻辑：
-        # 如果传入了 images (3D CT 数据) 并且尚未生成 inputs_embeds
-        # 则调用 LLaVA 的方法，经过我们的 CT Encoder 和 Attention-Pooler
+        # 劫持逻辑：如果有 3D CT (images) 且没有 inputs_embeds，
+        # 则调用 LLaVA 的 prepare 方法，通过 CT-CLIP 和 Projector 生成 Embeddings
         # ==========================================================
         if inputs_embeds is None and images is not None:
             (
@@ -71,11 +102,9 @@ class LlavaQwenForCausalLM(Qwen3VLForConditionalGeneration, LlavaMetaForCausalLM
             )
 
         # ==========================================================
-        # 将拼装好 CT Token 的 inputs_embeds 喂给 Qwen3-VL 的底座。
-        # 由于我们提供了 inputs_embeds，Qwen 会自动跳过内部的 2D 处理流，
-        # 直接进行语言模型的推理。
+        # 将拼装好 CT Token 的 inputs_embeds 喂给 Qwen3.5 的底座
         # ==========================================================
-        return super(Qwen3VLForConditionalGeneration, self).forward(
+        return super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -91,7 +120,7 @@ class LlavaQwenForCausalLM(Qwen3VLForConditionalGeneration, LlavaMetaForCausalLM
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
-        _inputs = super(Qwen3VLForConditionalGeneration, self).prepare_inputs_for_generation(
+        _inputs = super().prepare_inputs_for_generation(
             input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
         )
         if images is not None:
@@ -99,6 +128,6 @@ class LlavaQwenForCausalLM(Qwen3VLForConditionalGeneration, LlavaMetaForCausalLM
         return _inputs
 
 
-# 注册模型，使其可以通过 AutoModel 方式加载
+# 注册模型
 AutoConfig.register("llava_qwen", LlavaQwenConfig)
 AutoModelForCausalLM.register(LlavaQwenConfig, LlavaQwenForCausalLM)
