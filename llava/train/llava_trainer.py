@@ -10,6 +10,7 @@ from transformers.trainer import (
     get_parameter_names,
     has_length,
     logger,
+)
 
 # 兼容新版 transformers 的 LayerNorm 导入
 try:
