@@ -75,7 +75,7 @@ class PEG(nn.Module):
 
         x = F.pad(x, (1, 1, 1, 1, *frame_padding), value = 0.)
         #x = self.dsconv(x)
-        import torch.nn.functional as F
+
 
         # --- 强制绕过 cuDNN 半精度 3D 深度卷积 Bug ---
         orig_dtype = x.dtype
