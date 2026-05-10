@@ -2,28 +2,27 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import nn, einsum
-
 from beartype import beartype
 from typing import Tuple
-
 from einops import rearrange, repeat
 
-# helpers1
 
+# helpers
 def exists(val):
     return val is not None
+
 
 def default(val, d):
     return val if exists(val) else d
 
-def leaky_relu(p = 0.1):
+
+def leaky_relu(p=0.1):
     return nn.LeakyReLU(p)
 
-def l2norm(t):
-    return F.normalize(t, dim = -1)
 
-# bias-less layernorm, being used in more recent T5s, PaLM, also in @borisdayma 's experiments shared with me
-# greater stability
+def l2norm(t):
+    return F.normalize(t, dim=-1).to(t.dtype)  # 强制防污染
+
 
 class LayerNorm(nn.Module):
     def __init__(self, dim):
@@ -32,55 +31,47 @@ class LayerNorm(nn.Module):
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x):
-        # 强制将 gamma 和 beta 转换为与 x 相同的精度 (如 bfloat16)
+        # 强制将 gamma 和 beta 对齐到输入精度，杜绝向上转 fp32
         return F.layer_norm(x, x.shape[-1:], self.gamma.to(x.dtype), self.beta.to(x.dtype))
 
-# feedforward
 
 class GEGLU(nn.Module):
     def forward(self, x):
-        x, gate = x.chunk(2, dim = -1)
+        x, gate = x.chunk(2, dim=-1)
         return F.gelu(gate) * x
 
-def FeedForward(dim, mult = 4, dropout = 0.):
+
+def FeedForward(dim, mult=4, dropout=0.):
     inner_dim = int(mult * (2 / 3) * dim)
     return nn.Sequential(
-        nn.LayerNorm(dim),
-        nn.Linear(dim, inner_dim * 2, bias = False),
+        LayerNorm(dim),  # 替换为安全的自定义 LayerNorm
+        nn.Linear(dim, inner_dim * 2, bias=False),
         GEGLU(),
         nn.Dropout(dropout),
-        nn.Linear(inner_dim, dim, bias = False)
+        nn.Linear(inner_dim, dim, bias=False)
     )
 
-# PEG - position generating module
 
 class PEG(nn.Module):
-    def __init__(self, dim, causal = False):
+    def __init__(self, dim, causal=False):
         super().__init__()
         self.causal = causal
-        self.dsconv = nn.Conv3d(dim, dim, 3, groups = dim)
+        self.dsconv = nn.Conv3d(dim, dim, 3, groups=dim)
 
     @beartype
     def forward(self, x, shape: Tuple[int, int, int, int] = None):
+        target_dtype = x.dtype  # 记录输入真实精度
         needs_shape = x.ndim == 3
         assert not (needs_shape and not exists(shape))
-
         orig_shape = x.shape
-
         if needs_shape:
             x = x.reshape(*shape, -1)
-
         x = rearrange(x, 'b ... d -> b d ...')
-
         frame_padding = (2, 0) if self.causal else (1, 1)
 
-        x = F.pad(x, (1, 1, 1, 1, *frame_padding), value = 0.)
-        #x = self.dsconv(x)
+        x = F.pad(x, (1, 1, 1, 1, *frame_padding), value=0.)
 
-
-        # --- 强制绕过 cuDNN 半精度 3D 深度卷积 Bug ---
-        orig_dtype = x.dtype
-        # 将权重和输入动态拉到 fp32，避开底层 Bug
+        # 绕过 cuDNN fp16/bf16 3D卷积 Bug
         w_fp32 = self.dsconv.weight.to(torch.float32)
         b_fp32 = self.dsconv.bias.to(torch.float32) if self.dsconv.bias is not None else None
 
@@ -93,32 +84,16 @@ class PEG(nn.Module):
             dilation=self.dsconv.dilation,
             groups=self.dsconv.groups
         )
-        # 算完后立刻转回原来的精度
-        x = x.to(orig_dtype)
-        # ---------------------------------------------
-
+        x = x.to(target_dtype)  # 强制转回真实精度
         x = rearrange(x, 'b d ... -> b ... d')
-
         if needs_shape:
             x = rearrange(x, 'b ... d -> b (...) d')
-
         return x.reshape(orig_shape)
 
-# attention
 
 class Attention(nn.Module):
-    def __init__(
-        self,
-        dim,
-        dim_context = None,
-        dim_head = 64,
-        heads = 8,
-        causal = False,
-        num_null_kv = 0,
-        norm_context = True,
-        dropout = 0.,
-        scale = 8
-    ):
+    def __init__(self, dim, dim_context=None, dim_head=64, heads=8, causal=False, num_null_kv=0, norm_context=True,
+                 dropout=0., scale=8):
         super().__init__()
         self.heads = heads
         self.causal = causal
@@ -127,81 +102,69 @@ class Attention(nn.Module):
         dim_context = default(dim_context, dim)
 
         if causal:
-            self.rel_pos_bias = AlibiPositionalBias(heads = heads)
+            self.rel_pos_bias = AlibiPositionalBias(heads=heads)
 
         self.attn_dropout = nn.Dropout(dropout)
-
         self.norm = LayerNorm(dim)
         self.context_norm = LayerNorm(dim_context) if norm_context else nn.Identity()
 
         self.num_null_kv = num_null_kv
         self.null_kv = nn.Parameter(torch.randn(heads, 2 * num_null_kv, dim_head))
 
-        self.to_q = nn.Linear(dim, inner_dim, bias = False)
-        self.to_kv = nn.Linear(dim_context, inner_dim * 2, bias = False)
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim_context, inner_dim * 2, bias=False)
 
         self.q_scale = nn.Parameter(torch.ones(dim_head))
         self.k_scale = nn.Parameter(torch.ones(dim_head))
+        self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
-        self.to_out = nn.Linear(inner_dim, dim, bias = False)
+    def forward(self, x, mask=None, context=None, attn_bias=None):
+        target_dtype = x.dtype  # 锁定目标精度
+        batch, device = x.shape[0], x.device
 
-    def forward(
-        self,
-        x,
-        mask = None,
-        context = None,
-        attn_bias = None
-    ):
-        batch, device, dtype = x.shape[0], x.device, x.dtype
-        device=torch.device('cuda')
         if exists(context):
             context = self.context_norm(context)
 
         kv_input = default(context, x)
-
         x = self.norm(x)
 
-        q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim = -1)
+        q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
 
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), (q, k, v))
-
-        nk, nv = repeat(self.null_kv, 'h (n r) d -> b h n r d', b = batch, r = 2).unbind(dim = -2)
-
-        k = torch.cat((nk, k), dim = -2)
-        v = torch.cat((nv, v), dim = -2)
+        nk, nv = repeat(self.null_kv.to(target_dtype), 'h (n r) d -> b h n r d', b=batch, r=2).unbind(dim=-2)
+        k = torch.cat((nk, k), dim=-2)
+        v = torch.cat((nv, v), dim=-2)
 
         q, k = map(l2norm, (q, k))
-        q = q * self.q_scale
-        k = k * self.k_scale
+        q = q * self.q_scale.to(target_dtype)
+        k = k * self.k_scale.to(target_dtype)
 
         sim = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
-
         i, j = sim.shape[-2:]
 
         if exists(attn_bias):
-            attn_bias = F.pad(attn_bias, (self.num_null_kv, 0), value = 0.)
+            attn_bias = F.pad(attn_bias.to(target_dtype), (self.num_null_kv, 0), value=0.)
             sim = sim + attn_bias
 
         if exists(mask):
-            mask = F.pad(mask, (self.num_null_kv, 0), value = True)
+            mask = F.pad(mask, (self.num_null_kv, 0), value=True)
             mask = rearrange(mask, 'b j -> b 1 1 j')
             sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
 
         if self.causal:
-            sim = sim + self.rel_pos_bias(sim)
-            device=torch.device('cuda')
-            causal_mask = torch.ones((i, j), device = device, dtype = torch.bool).triu(j - i + 1)
+            sim = sim + self.rel_pos_bias(sim).to(target_dtype)
+            causal_mask = torch.ones((i, j), device=device, dtype=torch.bool).triu(j - i + 1)
             sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
-        attn = sim.softmax(dim = -1)
+        attn = sim.softmax(dim=-1).to(target_dtype)
         attn = self.attn_dropout(attn)
 
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
-
         out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
 
-# alibi positional bias for extrapolation
+        # 最致命的 Linear 层前，再次强制对齐
+        return self.to_out(out.to(target_dtype))
+
 
 class AlibiPositionalBias(nn.Module):
     def __init__(self, heads):
@@ -209,148 +172,100 @@ class AlibiPositionalBias(nn.Module):
         self.heads = heads
         slopes = torch.Tensor(self._get_slopes(heads))
         slopes = rearrange(slopes, 'h -> h 1 1')
-        self.register_buffer('slopes', slopes, persistent = False)
-        self.register_buffer('bias', None, persistent = False)
+        self.register_buffer('slopes', slopes, persistent=False)
+        self.register_buffer('bias', None, persistent=False)
 
     def get_bias(self, i, j, device):
-        device=torch.device('cuda')
-        i_arange = torch.arange(j - i, j, device = device)
-        j_arange = torch.arange(j, device = device)
+        i_arange = torch.arange(j - i, j, device=device)
+        j_arange = torch.arange(j, device=device)
         bias = -torch.abs(rearrange(j_arange, 'j -> 1 1 j') - rearrange(i_arange, 'i -> 1 i 1'))
         return bias
 
     @staticmethod
     def _get_slopes(heads):
         def get_slopes_power_of_2(n):
-            start = (2**(-2**-(math.log2(n)-3)))
+            start = (2 ** (-2 ** -(math.log2(n) - 3)))
             ratio = start
-            return [start*ratio**i for i in range(n)]
+            return [start * ratio ** i for i in range(n)]
 
         if math.log2(heads).is_integer():
             return get_slopes_power_of_2(heads)
 
         closest_power_of_2 = 2 ** math.floor(math.log2(heads))
-        return get_slopes_power_of_2(closest_power_of_2) + get_slopes_power_of_2(2 * closest_power_of_2)[0::2][:heads-closest_power_of_2]
+        return get_slopes_power_of_2(closest_power_of_2) + get_slopes_power_of_2(2 * closest_power_of_2)[0::2][
+            :heads - closest_power_of_2]
 
     def forward(self, sim):
         h, i, j, device = *sim.shape[-3:], sim.device
 
         if exists(self.bias) and self.bias.shape[-1] >= j:
             return self.bias[..., :i, :j]
-        device=torch.device('cuda')
         bias = self.get_bias(i, j, device)
         bias = bias * self.slopes
 
         num_heads_unalibied = h - bias.shape[0]
         bias = F.pad(bias, (0, 0, 0, 0, 0, num_heads_unalibied))
-        self.register_buffer('bias', bias, persistent = False)
+        self.register_buffer('bias', bias, persistent=False)
 
         return self.bias
 
-class ContinuousPositionBias(nn.Module):
-    """ from https://arxiv.org/abs/2111.09883 """
 
-    def __init__(
-        self,
-        *,
-        dim,
-        heads,
-        num_dims = 2, # 2 for images, 3 for video
-        layers = 2,
-        log_dist = True,
-        cache_rel_pos = False
-    ):
+class ContinuousPositionBias(nn.Module):
+    def __init__(self, *, dim, heads, num_dims=2, layers=2, log_dist=True, cache_rel_pos=False):
         super().__init__()
         self.num_dims = num_dims
         self.log_dist = log_dist
-
         self.net = nn.ModuleList([])
         self.net.append(nn.Sequential(nn.Linear(self.num_dims, dim), leaky_relu()))
-
         for _ in range(layers - 1):
             self.net.append(nn.Sequential(nn.Linear(dim, dim), leaky_relu()))
-
         self.net.append(nn.Linear(dim, heads))
-
         self.cache_rel_pos = cache_rel_pos
-        self.register_buffer('rel_pos', None, persistent = False)
+        self.register_buffer('rel_pos', None, persistent=False)
 
-    def forward(self, *dimensions, device = torch.device('cpu')):
-
+    def forward(self, *dimensions, device=torch.device('cpu')):
         if not exists(self.rel_pos) or not self.cache_rel_pos:
-            device=torch.device('cuda')
-            positions = [torch.arange(d, device = device) for d in dimensions]
-            grid = torch.stack(torch.meshgrid(*positions, indexing = 'ij'))
+            device = next(self.net.parameters()).device
+            positions = [torch.arange(d, device=device) for d in dimensions]
+            grid = torch.stack(torch.meshgrid(*positions, indexing='ij'))
             grid = rearrange(grid, 'c ... -> (...) c')
             rel_pos = rearrange(grid, 'i c -> i 1 c') - rearrange(grid, 'j c -> 1 j c')
-
             if self.log_dist:
                 rel_pos = torch.sign(rel_pos) * torch.log(rel_pos.abs() + 1)
+            self.register_buffer('rel_pos', rel_pos, persistent=False)
 
-            self.register_buffer('rel_pos', rel_pos, persistent = False)
-
-        # 获取当前网络层真实的 dtype (可能是 float32，也可能是 bfloat16)
         target_dtype = next(self.net.parameters()).dtype
         rel_pos = self.rel_pos.to(target_dtype)
-
         for layer in self.net:
             rel_pos = layer(rel_pos)
-
         return rearrange(rel_pos, 'i j h -> h i j')
 
-# transformer
 
 class Transformer(nn.Module):
-    def __init__(
-        self,
-        dim,
-        *,
-        depth,
-        dim_context = None,
-        causal = False,
-        dim_head = 64,
-        heads = 8,
-        ff_mult = 4,
-        peg = False,
-        peg_causal = False,
-        attn_num_null_kv = 2,
-        has_cross_attn = False,
-        attn_dropout = 0.,
-        ff_dropout = 0.
-    ):
+    def __init__(self, dim, *, depth, dim_context=None, causal=False, dim_head=64, heads=8, ff_mult=4, peg=False,
+                 peg_causal=False, attn_num_null_kv=2, has_cross_attn=False, attn_dropout=0., ff_dropout=0.):
         super().__init__()
         self.layers = nn.ModuleList([])
-
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                PEG(dim = dim, causal = peg_causal) if peg else None,
-                Attention(dim = dim, dim_head = dim_head, heads = heads, causal = causal, dropout = attn_dropout),
-                Attention(dim = dim, dim_head = dim_head, dim_context = dim_context, heads = heads, causal = False, num_null_kv = attn_num_null_kv, dropout = attn_dropout) if has_cross_attn else None,
-                FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
+                PEG(dim=dim, causal=peg_causal) if peg else None,
+                Attention(dim=dim, dim_head=dim_head, heads=heads, causal=causal, dropout=attn_dropout),
+                Attention(dim=dim, dim_head=dim_head, dim_context=dim_context, heads=heads, causal=False,
+                          num_null_kv=attn_num_null_kv, dropout=attn_dropout) if has_cross_attn else None,
+                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)
             ]))
-
         self.norm_out = LayerNorm(dim)
 
     @beartype
-    def forward(
-        self,
-        x,
-        video_shape: Tuple[int, int, int, int] = None,
-        attn_bias = None,
-        context = None,
-        self_attn_mask = None,
-        cross_attn_context_mask = None
-    ):
-
+    def forward(self, x, video_shape: Tuple[int, int, int, int] = None, attn_bias=None, context=None,
+                self_attn_mask=None, cross_attn_context_mask=None):
+        target_dtype = next(self.norm_out.parameters()).dtype
+        x = x.to(target_dtype)
         for peg, self_attn, cross_attn, ff in self.layers:
             if exists(peg):
-                x = peg(x, shape = video_shape) + x
-
-            x = self_attn(x, attn_bias = attn_bias, mask = self_attn_mask) + x
-
+                x = peg(x, shape=video_shape).to(target_dtype) + x
+            x = self_attn(x.to(target_dtype), attn_bias=attn_bias, mask=self_attn_mask).to(target_dtype) + x
             if exists(cross_attn) and exists(context):
-                x = cross_attn(x, context = context, mask = cross_attn_context_mask) + x
-
-            x = ff(x) + x
-
+                x = cross_attn(x.to(target_dtype), context=context, mask=cross_attn_context_mask).to(target_dtype) + x
+            x = ff(x.to(target_dtype)) + x
         return self.norm_out(x)
