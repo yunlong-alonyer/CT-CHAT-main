@@ -153,7 +153,9 @@ def process_dicom_for_v2(dicom_dir):
     tensor = tensor.permute(2, 0, 1)
 
     # 7. 最终增加 Batch 和 Channel 维度: [1, 1, 32, 240, 240]，并转半精度
-    return tensor.unsqueeze(0).unsqueeze(0).cuda().half()
+    #return tensor.unsqueeze(0).unsqueeze(0).cuda().half()
+    # 7. 最终增加 Batch 和 Channel 维度，并转为与模型一致的 BFloat16
+    return tensor.unsqueeze(0).unsqueeze(0).cuda().bfloat16()
 
 
 # =========================================================================
@@ -192,8 +194,11 @@ model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
 # 精度桥接策略：模型整体 FP16，视觉塔单兵 FP32
-model.to(dtype=torch.float16, device="cuda")
-model.get_model().vision_tower.to(torch.float32)
+#model.to(dtype=torch.float16, device="cuda")
+#model.get_model().vision_tower.to(torch.float32)
+
+# 改为直接推入 CUDA，保持统一的 bfloat16 精度：
+model.cuda()
 model.eval()
 
 # 准备文本输入
