@@ -19,11 +19,10 @@ class CTCLIPVisionTower(nn.Module):
             self.vision_tower_path = getattr(args, 'vision_tower_path', None)
 
         # 2. 初始化 CT-CLIP 的 3D ViT
-        # (保持原有的 CTViT 配置不变)
         self.vision_tower = CTViT(
             dim=768,
             codebook_size=8192,
-            image_size=224,  # <--- 从 240 改为 224
+            image_size=224,
             patch_size=16,
             temporal_patch_size=2,
             spatial_depth=12,
@@ -45,8 +44,7 @@ class CTCLIPVisionTower(nn.Module):
             print(f"[*] 正在加载 CT-CLIP 预训练权重: {self.vision_tower_path}")
             ckpt = torch.load(self.vision_tower_path, map_location="cpu")
 
-            # CT-CLIP 的权重字典前缀可能需要清洗（剥离对比学习层的权重，只保留 ViT）
-            # 这里假设保存的权重前缀为 'visual.' 或者直接是模型参数
+            # 清洗权重字典
             state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
             vision_state_dict = {k.replace('visual.', ''): v for k, v in state_dict.items() if
                                  'visual' in k or 'transformer' in k}
@@ -55,28 +53,38 @@ class CTCLIPVisionTower(nn.Module):
                 self.vision_tower.load_state_dict(vision_state_dict, strict=False)
                 print("[*] CT-CLIP 权重加载成功！")
             except Exception as e:
-                print(f"[!] 权重加载警告 (可忽略未匹配的投射层): {e}")
+                print(f"[!] 权重加载警告: {e}")
+
+            # --- 核心修复点 1：加载后立即强制转为 bfloat16 ---
+            # 这一步是为了将第三方库 vector_quantize_pytorch 内部的 Float32 参数转为 BF16
+            self.vision_tower.to(torch.bfloat16)
+            # ----------------------------------------------
 
             self.is_loaded = True
         else:
             print(f"[!] 未找到路径 {self.vision_tower_path}，将使用随机初始化权重！")
+            self.vision_tower.to(torch.bfloat16) # 即使随机初始化也要对齐精度
 
-        # 冻结视觉塔权重，只训练后续的 Attentional Pooler 和 LLM
+        # 冻结视觉塔权重
         for param in self.vision_tower.parameters():
             param.requires_grad = False
 
     def forward(self, images):
-        # 1. 动态获取模型参数的目标精度 (当前是 bfloat16)
-        vt_dtype = next(self.vision_tower.parameters()).dtype
+        # 1. 动态获取模型参数的当前精度和设备
+        # 确保输入 images 被推送到与视觉塔相同的设备（如 cuda:0）和精度（BF16）
+        vt_param = next(self.vision_tower.parameters())
+        target_device = vt_param.device
+        target_dtype = vt_param.dtype
 
-        # 2. 确保输入张量连续且类型一致
-        images_input = images.to(vt_dtype).contiguous()
+        # 2. 预处理输入张量
+        # 即使 LLM 传过来的是 BF16，这里再做一次显式转换以防万一
+        images_input = images.to(device=target_device, dtype=target_dtype).contiguous()
 
-        # 3. 核心修复：使用 torch.amp.autocast 强制统一计算精度！
-        # 这个上下文管理器将自动解决内部所有硬编码 .float() 导致的冲突
+        # 3. 核心修复点 2：在计算时再次强制精度上下文
         with torch.no_grad():
-            with torch.amp.autocast('cuda', dtype=vt_dtype):
-                # 记录原始 cuDNN 状态，暂时关闭它以绕过 3D 深度卷积 Bug
+            # 使用 autocast 自动处理内部可能存在的精度跳变
+            with torch.amp.autocast('cuda', dtype=target_dtype):
+                # 记录原始 cuDNN 状态，暂时关闭它以绕过 3D 深度卷积在某些版本的 Bug
                 cudnn_orig = torch.backends.cudnn.enabled
                 torch.backends.cudnn.enabled = False
 
@@ -89,12 +97,29 @@ class CTCLIPVisionTower(nn.Module):
                 # 立即恢复 cuDNN 状态
                 torch.backends.cudnn.enabled = cudnn_orig
 
+        # 4. 后处理特征维度
         if image_features.ndim == 5:
+            # (batch, temporal_patches, spatial_h, spatial_w, dim) -> (batch, num_patches, dim)
             image_features = image_features.flatten(1, 3)
 
-        # 确保输出强制转为大模型所期望的精度
-        return image_features.to(images.dtype)
+        # 确保返回的特征精度与 LLM 期望的精度（通常是 BF16）对齐
+        return image_features.to(dtype=images.dtype)
 
     @property
     def dummy_feature(self):
-        return torch.zeros(1, self.hidden_size, device=self.vision_tower.device, dtype=self.vision_tower.dtype)
+        # 获取当前设备和精度用于生成 dummy tensor
+        vt_param = next(self.vision_tower.parameters())
+        return torch.zeros(
+            1,
+            self.hidden_size,
+            device=vt_param.device,
+            dtype=vt_param.dtype
+        )
+
+    @property
+    def device(self):
+        return next(self.vision_tower.parameters()).device
+
+    @property
+    def dtype(self):
+        return next(self.vision_tower.parameters()).dtype
