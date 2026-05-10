@@ -2,9 +2,9 @@
 export PYTHONPATH="$PWD:$PYTHONPATH"
 
 # 指定使用的 GPU 单卡跑预训练1
-export CUDA_VISIBLE_DEVICES=0
+#export CUDA_VISIBLE_DEVICES=0
 
-python llava/train/train_mem.py \
+deepspeed --num_gpus 8 llava/train/train_mem.py \
     --deepspeed ./zero3.json \
     --model_name_or_path /home/huali/model/Qwen3.5-9B \
     --version plain \
@@ -21,7 +21,7 @@ python llava/train/train_mem.py \
     --num_train_epochs 3 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 1 \
     --save_strategy "steps" \
     --save_steps 200 \
     --save_total_limit 1 \
@@ -33,6 +33,6 @@ python llava/train/train_mem.py \
     --tf32 True \
     --model_max_length 2048 \
     --gradient_checkpointing True \
-    --dataloader_num_workers 0 \
+    --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to none
