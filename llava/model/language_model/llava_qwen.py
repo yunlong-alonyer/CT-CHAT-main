@@ -7,9 +7,6 @@ from llava.model.llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 
 # =========================================================================
 # 1. 动态导入 Qwen3_5ForConditionalGeneration
-# 因为 Qwen3.5 是非常新的模型 (transformers_version: 4.57.0.dev0)，
-# 原生 transformers 可能还不包含它。如果直接 import 报错，你需要从本地
-# pretrained_models/Qwen3.5-9B/modeling_qwen3_5.py 中导入。
 # =========================================================================
 try:
     from transformers import Qwen3_5ForConditionalGeneration
@@ -17,8 +14,8 @@ except ImportError:
     import sys
     import os
 
-    # 假设你的 Qwen3.5 权重在 pretrained_models/Qwen3.5-9B 下
-    sys.path.append(os.path.abspath("../../../pretrained_models/Qwen-VL"))
+    #  Qwen3.5 权重在 Qwen3.5-9B 下
+    sys.path.append(os.path.abspath("../../../../../model/Qwen3.5-9B"))
     try:
         from modeling_qwen3_5 import Qwen3_5ForConditionalGeneration
     except ImportError:

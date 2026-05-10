@@ -7,10 +7,13 @@ from llava.model.multimodal_encoder.builder import build_vision_tower
 from llava.model.multimodal_projector.builder import build_vision_projector
 from llava.mm_utils import tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+import sys
+import os
+sys.path.insert(0, '/home/huali/code/CT-CHAT-main')
 
 # 1. 路径配置 (按照你的真实路径)
-QWEN_DIR = "./pretrained_models/Qwen-VL"
-CT_CLIP_PATH = "./pretrained_models/Qwen-VL/CT-CLIP_v2.pt"
+QWEN_DIR = "../../model/Qwen3.5-9B"
+CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
 
 print(f"[*] 正在加载 Qwen3.5 配置与 Tokenizer: {QWEN_DIR}")
 tokenizer = AutoTokenizer.from_pretrained(QWEN_DIR, trust_remote_code=True)
@@ -53,14 +56,16 @@ model.get_model().mm_projector = build_vision_projector(raw_config)
 # 先把整个模型转为半精度 FP16，并放到显卡
 model.to(dtype=torch.float16, device="cuda")
 
-# 【核心修改】：把第三方库的视觉塔单独抽出来，强行转回 FP32，迎合它内部的硬编码！
+# 把第三方库的视觉塔单独抽出来，强行转回 FP32，迎合内部的硬编码
 model.get_model().vision_tower.to(torch.float32)
 
 model.eval()
 
 # 5. 准备测试输入
 # 构建 Prompt: <image>\n请根据这张CT图像生成一份诊断报告。
-prompt = f"{DEFAULT_IMAGE_TOKEN}\nPlease provide a detailed diagnostic report for this 3D CT scan."
+#prompt = f"{DEFAULT_IMAGE_TOKEN}\nPlease provide a detailed diagnostic report for this 3D CT scan."
+prompt = f"{DEFAULT_IMAGE_TOKEN}\n请根据这个3D CT影像，给出一个详细的医学报告."
+#prompt = f" 你是什么模型."
 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
 
 # 伪造 3D CT 数据 [Batch=1, C=1, D=32, H=240, W=240]

@@ -80,7 +80,7 @@ class CTClipVisionTower(nn.Module):
             if image_features.ndim == 5:
                 image_features = image_features.flatten(1, 3)
 
-                # 4. 将输出特征强行转回外部大模型的精度 (FP32 -> FP16)，无缝交接给 Projector
+             # 4. 将输出特征强行转回外部大模型的精度 (FP32 -> FP16)，无缝交接给 Projector
             # fallback 取 images 的原精度即可 (即最开始传进来的 FP16)
             return image_features.to(images.dtype)
 

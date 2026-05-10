@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="Black">
+    <option name="sdkName" value="Python 3.9 (CT-CHAT-main)" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="SSH (sftp://supermicro@172.20.137.242:50003/home/supermicro/anaconda3/envs/zyl_ct/bin/python)" project-jdk-type="Python SDK" />
+</project>

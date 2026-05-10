@@ -37,12 +37,12 @@ def build_vision_projector(config, delay_load=False, **kwargs):
 
     # =====================================================================
     # 核心修改 1：动态获取目标语言模型的隐藏层维度
-    # 兼容 Qwen3-VL 嵌套的 text_config 结构 (5120)，以及 LLaVA 原生的结构。
+    # 兼容 Qwen3.5-VL 嵌套的 text_config 结构 (4096)，以及 LLaVA 原生的结构。
     # =====================================================================
     if hasattr(config, 'text_config'):
         target_hidden_size = config.text_config.hidden_size
     else:
-        target_hidden_size = getattr(config, 'hidden_size', 5120)
+        target_hidden_size = getattr(config, 'hidden_size', 4096)
 
     # =====================================================================
     # 核心修改 2：新增 3D CT 影像 Attention-Pooling 分支 (保持架构解耦)
