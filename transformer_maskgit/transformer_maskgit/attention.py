@@ -109,7 +109,12 @@ class Attention(nn.Module):
         self.context_norm = LayerNorm(dim_context) if norm_context else nn.Identity()
 
         self.num_null_kv = num_null_kv
-        self.null_kv = nn.Parameter(torch.randn(heads, 2 * num_null_kv, dim_head))
+
+        # --- 核心修复 1: 避免注册 0 维度的 Parameter ---
+        if num_null_kv > 0:
+            self.null_kv = nn.Parameter(torch.randn(heads, 2 * num_null_kv, dim_head))
+        else:
+            self.register_buffer("null_kv", None)
 
         self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv = nn.Linear(dim_context, inner_dim * 2, bias=False)
@@ -131,9 +136,11 @@ class Attention(nn.Module):
         q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
 
-        nk, nv = repeat(self.null_kv.to(target_dtype), 'h (n r) d -> b h n r d', b=batch, r=2).unbind(dim=-2)
-        k = torch.cat((nk, k), dim=-2)
-        v = torch.cat((nv, v), dim=-2)
+        # --- 核心修复 2: 仅在 num_null_kv > 0 时进行拼接 ---
+        if self.num_null_kv > 0 and self.null_kv is not None:
+            nk, nv = repeat(self.null_kv.to(target_dtype), 'h (n r) d -> b h n r d', b=batch, r=2).unbind(dim=-2)
+            k = torch.cat((nk, k), dim=-2)
+            v = torch.cat((nv, v), dim=-2)
 
         q, k = map(l2norm, (q, k))
         q = q * self.q_scale.to(target_dtype)
@@ -162,7 +169,6 @@ class Attention(nn.Module):
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
 
-        # 最致命的 Linear 层前，再次强制对齐
         return self.to_out(out.to(target_dtype))
 
 
