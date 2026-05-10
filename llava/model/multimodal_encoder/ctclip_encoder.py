@@ -5,7 +5,7 @@ import os
 from transformer_maskgit.ctvit import CTViT
 
 
-class CTClipVisionTower(nn.Module):
+class CTCLIPVisionTower(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
