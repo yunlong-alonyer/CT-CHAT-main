@@ -143,7 +143,7 @@ class LLaVATrainer(Trainer):
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
 
-        # 检查是否需要按模态长度分组（LLaVA 特有的采样优化）
+        # 检查是否需要按模态长度分组
         if getattr(self.args, "group_by_modality_length", False):
             lengths = self.train_dataset.modality_lengths
             return LengthGroupedSampler(
