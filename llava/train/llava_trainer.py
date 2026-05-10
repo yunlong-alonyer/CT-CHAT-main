@@ -138,27 +138,28 @@ class LengthGroupedSampler(Sampler):
 
 class LLaVATrainer(Trainer):
 
-    def _get_train_sampler(self, dataset=None, **kwargs) -> Optional[torch.utils.data.Sampler]:
-        # 如果传入了 dataset 则使用传入的，否则使用 self.train_dataset
-        train_dataset = dataset if dataset is not None else self.train_dataset
+    def _get_train_sampler(self, **kwargs) -> Optional[torch.utils.data.Sampler]:
+        # 兼容性处理：从 kwargs 中提取 dataset，如果不存在则使用 self.train_dataset
+        dataset = kwargs.get('dataset', self.train_dataset)
 
-        if train_dataset is None or not has_length(train_dataset):
+        if dataset is None or not has_length(dataset):
             return None
 
+        # 检查是否开启了模态分组（LLaVA 特性）
         if getattr(self.args, "group_by_modality_length", False):
-            lengths = train_dataset.modality_lengths
-            return LengthGroupedSampler(
-                self.args.train_batch_size,
-                world_size=self.args.world_size * self.args.gradient_accumulation_steps,
-                lengths=lengths,
-                group_by_modality=True,
-            )
-        else:
-            # 兼容新老版本的 transformers 传参
-            if dataset is not None:
-                return super()._get_train_sampler(dataset=dataset, **kwargs)
-            else:
-                return super()._get_train_sampler(**kwargs)
+            # 确保 dataset 对象有 modality_lengths 属性
+            lengths = getattr(dataset, 'modality_lengths', None)
+            if lengths is not None:
+                return LengthGroupedSampler(
+                    self.args.train_batch_size,
+                    world_size=self.args.world_size * self.args.gradient_accumulation_steps,
+                    lengths=lengths,
+                    group_by_modality=True,
+                )
+
+        # 如果不满足分组条件，调用父类原生采样器
+        # 关键修复：不再手动传递 dataset=dataset，直接透传所有参数
+        return super()._get_train_sampler(**kwargs)
 
     def create_optimizer(self):
         """
