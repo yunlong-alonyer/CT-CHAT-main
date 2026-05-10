@@ -138,25 +138,34 @@ model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
 PROJECTOR_WEIGHTS_PATH = "./checkpoints/qwen-ct-pretrain/mm_projector.bin"
+# ==========================================
+# 修改 test_real_data.py 中加载适配器权重的部分
+# ==========================================
+
 if os.path.exists(PROJECTOR_WEIGHTS_PATH):
     print(f"[*] 正在加载预训练适配器权重: {PROJECTOR_WEIGHTS_PATH}")
-    # 加载权重到 CPU
+
+    # 1. 加载原始权重
     checkpoint = torch.load(PROJECTOR_WEIGHTS_PATH, map_location="cpu")
 
-    # LLaVA 预训练保存的权重通常带有 'model.mm_projector.' 前缀
-    # 需要清洗 key 名以匹配当前的 mm_projector 模块
+    # 2. 精准清洗 Key 名
+    # 根据报错信息，前缀是 "mm_projector."
     state_dict = {}
     for k, v in checkpoint.items():
-        # 如果 key 包含前缀则去掉，否则保持原样
-        new_key = k.replace("model.mm_projector.", "")
-        state_dict[new_key] = v
+        # 如果 Key 开头是 mm_projector.，则去掉它
+        if k.startswith("mm_projector."):
+            new_key = k.replace("mm_projector.", "")
+            state_dict[new_key] = v
+        else:
+            state_dict[k] = v
 
-    # 加载到模型中
-    model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
+    # 3. 加载到模型中
+    # 建议先设置 strict=False 看看能否跑通，如果没问题再改回 True
+    msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
+    print(f"[*] 适配器权重加载结果: {msg}")
     print("[*] 适配器权重加载成功！")
 else:
-    print(f"[!] 警告：未找到权重文件 {PROJECTOR_WEIGHTS_PATH}，将继续使用随机初始化进行测试。")
-
+    print(f"[!] 警告：未找到权重文件 {PROJECTOR_WEIGHTS_PATH}")
 
 # --- 核心修复：强制对齐精度与设备 ---
 # 1. 适配器（Projector）必须跟随 LLM 使用 bfloat16
