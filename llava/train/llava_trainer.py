@@ -9,9 +9,14 @@ from transformers.trainer import (
     is_sagemaker_mp_enabled,
     get_parameter_names,
     has_length,
-    ALL_LAYERNORM_LAYERS,
     logger,
-)
+
+# 兼容新版 transformers 的 LayerNorm 导入
+try:
+    from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+except ImportError:
+    import torch.nn as nn
+    ALL_LAYERNORM_LAYERS = [nn.LayerNorm]
 from typing import List, Optional
 
 
