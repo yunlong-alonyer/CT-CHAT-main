@@ -74,7 +74,27 @@ class PEG(nn.Module):
         frame_padding = (2, 0) if self.causal else (1, 1)
 
         x = F.pad(x, (1, 1, 1, 1, *frame_padding), value = 0.)
-        x = self.dsconv(x)
+        #x = self.dsconv(x)
+        import torch.nn.functional as F
+
+        # --- 强制绕过 cuDNN 半精度 3D 深度卷积 Bug ---
+        orig_dtype = x.dtype
+        # 将权重和输入动态拉到 fp32，避开底层 Bug
+        w_fp32 = self.dsconv.weight.to(torch.float32)
+        b_fp32 = self.dsconv.bias.to(torch.float32) if self.dsconv.bias is not None else None
+
+        x = F.conv3d(
+            x.to(torch.float32),
+            w_fp32,
+            bias=b_fp32,
+            stride=self.dsconv.stride,
+            padding=self.dsconv.padding,
+            dilation=self.dsconv.dilation,
+            groups=self.dsconv.groups
+        )
+        # 算完后立刻转回原来的精度
+        x = x.to(orig_dtype)
+        # ---------------------------------------------
 
         x = rearrange(x, 'b d ... -> b ... d')
 
