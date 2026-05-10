@@ -1,7 +1,7 @@
 # 将当前工作目录加入 Python 寻址路径，解决 llava 模块找不到的问题
 export PYTHONPATH="$PWD:$PYTHONPATH"
 
-# 指定使用的 GPU 单卡跑预训练
+# 指定使用的 GPU 单卡跑预训练1
 export CUDA_VISIBLE_DEVICES=0
 
 python llava/train/train_mem.py \
