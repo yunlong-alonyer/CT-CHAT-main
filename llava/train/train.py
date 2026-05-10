@@ -949,20 +949,18 @@ class LazySupervisedDataset(Dataset):
             sources = [sources]
 
         if 'image' in sources[0]:
+            # 现在 image_file 的值已经是 "1237805150010/3052493544...nii.gz"
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
 
-            # --- 自动处理病人子文件夹的路径逻辑 ---
-            # 假设文件名 P0000520759_... 前缀 P0000520759 就是文件夹名
-            patient_id = image_file.split('_')[0]
-            full_path = os.path.join(image_folder, patient_id, image_file)
+            # 直接拼接，得到完整的物理路径
+            full_path = os.path.join(image_folder, image_file)
 
-            # 如果按子文件夹找不到，尝试在根目录找
-            if not os.path.exists(full_path):
-                full_path = os.path.join(image_folder, image_file)
-
-            # 调用真实加载函数
-            embedding = self.nii_img_to_tensor(full_path)
+            try:
+                embedding = self.nii_img_to_tensor(full_path)
+            except Exception as e:
+                print(f"读取文件 {full_path} 失败: {e}")
+                embedding = torch.zeros(1, 32, 240, 240)
 
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
