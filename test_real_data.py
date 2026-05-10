@@ -126,7 +126,7 @@ def process_dicom_for_v2(dicom_dir):
     tensor = torch.tensor(img_data)
 
     # 5. 【核心对齐】: CT-CLIP_v2 目标输入尺寸是 (240, 240, 32) [X, Y, Z]
-    target_shape = (240, 240, 32)
+    target_shape = (224, 224, 32)
     h, w, d = tensor.shape
     dh, dw, dd = target_shape
 
