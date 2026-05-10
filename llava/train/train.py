@@ -109,6 +109,9 @@ class DataArguments:
     is_multimodal: bool = False
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
+    # --- 新增以下两行 ---
+    mm_use_im_start_end: bool = field(default=False)
+    mm_use_im_patch_token: bool = field(default=False)
 
 
 @dataclass
@@ -904,72 +907,62 @@ class LazySupervisedDataset(Dataset):
     #     """
 
     def nii_img_to_tensor(self, path):
-        # 1. 使用 nibabel 加载 NIfTI 文件
+        # 1. 加载 NIfTI
         nii_img = nib.load(str(path))
-        img_data = nii_img.get_fdata()  # 获取 3D 数组
+        img_data = nii_img.get_fdata()
 
-        # 2. 获取层间距 (Spacing) 信息
-        header = nii_img.header
-        zooms = header.get_zooms()  # 通常是 (x_spacing, y_spacing, z_spacing)
-        current_spacing = (zooms[2], zooms[0], zooms[1])  # 转换为 (z, x, y)
+        # 2. 获取间距 (Z, X, Y)
+        zooms = nii_img.header.get_zooms()
+        current_spacing = (zooms[2], zooms[0], zooms[1])  # (Z, X, Y)
 
-        # 3. 窗位/窗宽处理 (HU 值截断)
-        # 针对胸部 CT，建议截断在 [-1000, 1000] 或 [-1000, 200]
-        hu_min, hu_max = -1000, 1000
-        img_data = np.clip(img_data, hu_min, hu_max)
+        # 3. 预处理：截断 HU 值并归一化
+        img_data = np.clip(img_data, -1000, 1000)
+        img_data = (img_data + 1000) / 2000.0  # 归一化到 [0, 1]
 
-        # 4. 归一化到 [-1, 1]
-        img_data = (img_data - hu_min) / (hu_max - hu_min) * 2 - 1
-
-        # 5. 调整维度顺序为 (Depth, Height, Width)
-        # NIfTI 读入通常是 (H, W, D)，需要转置
+        # 4. 调整维度顺序为 (Depth, Height, Width) 并转为 Tensor
         img_data = img_data.transpose(2, 0, 1)
-
-        # 6. 空间重采样与 Resize
-        # 转换为 Tensor 以利用 torch.nn.functional.interpolate
         tensor = torch.tensor(img_data, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, D, H, W]
 
-        target_spacing = (1.5, 0.75, 0.75)  # 目标间距
-        img_data = resize_array(tensor, current_spacing, target_spacing)[0][0]  # 这里的 resize_array 是你文件顶部定义的
+        # 5. 重采样到目标间距 (1.5mm, 0.75mm, 0.75mm)
+        target_spacing = (1.5, 0.75, 0.75)
+        resized_data = resize_array(tensor, current_spacing, target_spacing)[0][0]
 
-        # 7. 中心裁剪或填充到目标形状 (32, 240, 240)
+        # 6. 中心裁剪/填充到 (32, 240, 240)
         target_shape = (32, 240, 240)
-        tensor = torch.tensor(img_data)
+        tensor = torch.tensor(resized_data)
         d, h, w = tensor.shape
         td, th, tw = target_shape
 
-        # 计算裁剪/填充
         d_start, h_start, w_start = max((d - td) // 2, 0), max((h - th) // 2, 0), max((w - tw) // 2, 0)
         tensor = tensor[d_start:d_start + td, h_start:h_start + th, w_start:w_start + tw]
 
-        # 如果尺寸不足，进行补齐
+        # 补齐不足的维度
         pad_d = max(td - tensor.size(0), 0)
         pad_h = max(th - tensor.size(1), 0)
         pad_w = max(tw - tensor.size(2), 0)
-        tensor = F.pad(tensor, (0, pad_w, 0, pad_h, 0, pad_d), value=-1)  # 使用 -1 填充背景
+        tensor = F.pad(tensor, (0, pad_w, 0, pad_h, 0, pad_d), value=0)
 
-        # 返回 [Channel=1, Depth=32, Height=240, Width=240]
-        return tensor.unsqueeze(0)
+        return tensor.unsqueeze(0)  # 返回 [1, 32, 240, 240]
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         sources = self.list_data_dict[i]
         if isinstance(i, int):
             sources = [sources]
-        assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
 
         if 'image' in sources[0]:
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
 
-            # 拼接完整路径
-            full_path = os.path.join(image_folder, image_file)
+            # --- 自动处理病人子文件夹的路径逻辑 ---
+            # 假设文件名 P0000520759_... 前缀 P0000520759 就是文件夹名
+            patient_id = image_file.split('_')[0]
+            full_path = os.path.join(image_folder, patient_id, image_file)
 
-            # --- 核心修改：调用真实加载函数 ---
-            try:
-                embedding = self.nii_img_to_tensor(full_path)
-            except Exception as e:
-                print(f"读取文件 {full_path} 失败: {e}")
-                # 容错：如果读取失败，返回一个全零张量或跳过
-                embedding = torch.zeros(1, 32, 240, 240)
+            # 如果按子文件夹找不到，尝试在根目录找
+            if not os.path.exists(full_path):
+                full_path = os.path.join(image_folder, image_file)
+
+            # 调用真实加载函数
+            embedding = self.nii_img_to_tensor(full_path)
 
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
