@@ -1032,6 +1032,15 @@ def train(attn_implementation=None):
                 cache_dir=training_args.cache_dir,
                 **bnb_model_from_pretrained_args
             )
+        elif 'qwen' in model_args.model_name_or_path.lower():
+            from llava.model.language_model.llava_qwen import LlavaQwenForCausalLM
+            model = LlavaQwenForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                **bnb_model_from_pretrained_args
+            )
         else:
             model = LlavaLlamaForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
