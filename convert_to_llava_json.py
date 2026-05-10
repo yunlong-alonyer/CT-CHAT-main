@@ -1,4 +1,3 @@
-cat << 'EOF' > convert_to_llava_json.py
 import pandas as pd
 import json
 
@@ -37,7 +36,3 @@ with open(output_json, 'w', encoding='utf-8') as f:
     json.dump(json_data, f, ensure_ascii=False, indent=2)
 
 print(f"✅ 转换完成，共生成 {len(json_data)} 条数据，已保存至 {output_json}")
-EOF
-
-python
-convert_to_llava_json.py
