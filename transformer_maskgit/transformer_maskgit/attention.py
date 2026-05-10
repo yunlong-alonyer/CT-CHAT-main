@@ -21,7 +21,8 @@ def leaky_relu(p=0.1):
 
 
 def l2norm(t):
-    return F.normalize(t, dim=-1).to(t.dtype)  # 强制防污染
+    # 修复：确保 l2norm 在转换 dtype 时也对齐设备
+    return F.normalize(t, dim=-1).to(device=t.device, dtype=t.dtype)
 
 
 class LayerNorm(nn.Module):
@@ -31,8 +32,14 @@ class LayerNorm(nn.Module):
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x):
-        # 强制将 gamma 和 beta 对齐到输入精度，杜绝向上转 fp32
-        return F.layer_norm(x, x.shape[-1:], self.gamma.to(x.dtype), self.beta.to(x.dtype))
+        # 核心修复：显式指定 device=x.device 和 dtype=x.dtype
+        # 这样即使 beta 在 CPU 上，也会被拉到当前 GPU
+        return F.layer_norm(
+            x,
+            x.shape[-1:],
+            self.gamma.to(device=x.device, dtype=x.dtype),
+            self.beta.to(device=x.device, dtype=x.dtype)
+        )
 
 
 class GEGLU(nn.Module):
@@ -44,7 +51,7 @@ class GEGLU(nn.Module):
 def FeedForward(dim, mult=4, dropout=0.):
     inner_dim = int(mult * (2 / 3) * dim)
     return nn.Sequential(
-        LayerNorm(dim),  # 替换为安全的自定义 LayerNorm
+        LayerNorm(dim),
         nn.Linear(dim, inner_dim * 2, bias=False),
         GEGLU(),
         nn.Dropout(dropout),
@@ -60,7 +67,7 @@ class PEG(nn.Module):
 
     @beartype
     def forward(self, x, shape: Tuple[int, int, int, int] = None):
-        target_dtype = x.dtype  # 记录输入真实精度
+        target_dtype = x.dtype
         needs_shape = x.ndim == 3
         assert not (needs_shape and not exists(shape))
         orig_shape = x.shape
@@ -71,9 +78,9 @@ class PEG(nn.Module):
 
         x = F.pad(x, (1, 1, 1, 1, *frame_padding), value=0.)
 
-        # 绕过 cuDNN fp16/bf16 3D卷积 Bug
-        w_fp32 = self.dsconv.weight.to(torch.float32)
-        b_fp32 = self.dsconv.bias.to(torch.float32) if self.dsconv.bias is not None else None
+        # 修复：绕过 cuDNN Bug 时，显式将权重转到 x.device 的 float32
+        w_fp32 = self.dsconv.weight.to(device=x.device, dtype=torch.float32)
+        b_fp32 = self.dsconv.bias.to(device=x.device, dtype=torch.float32) if self.dsconv.bias is not None else None
 
         x = F.conv3d(
             x.to(torch.float32),
@@ -84,7 +91,7 @@ class PEG(nn.Module):
             dilation=self.dsconv.dilation,
             groups=self.dsconv.groups
         )
-        x = x.to(target_dtype)  # 强制转回真实精度
+        x = x.to(device=x.device, dtype=target_dtype)
         x = rearrange(x, 'b d ... -> b ... d')
         if needs_shape:
             x = rearrange(x, 'b ... d -> b (...) d')
@@ -110,7 +117,6 @@ class Attention(nn.Module):
 
         self.num_null_kv = num_null_kv
 
-        # --- 核心修复 1: 避免注册 0 维度的 Parameter ---
         if num_null_kv > 0:
             self.null_kv = nn.Parameter(torch.randn(heads, 2 * num_null_kv, dim_head))
         else:
@@ -124,7 +130,7 @@ class Attention(nn.Module):
         self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
     def forward(self, x, mask=None, context=None, attn_bias=None):
-        target_dtype = x.dtype  # 锁定目标精度
+        target_dtype = x.dtype
         batch, device = x.shape[0], x.device
 
         if exists(context):
@@ -136,21 +142,24 @@ class Attention(nn.Module):
         q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
 
-        # --- 核心修复 2: 仅在 num_null_kv > 0 时进行拼接 ---
+        # 修复：对齐 null_kv 的设备
         if self.num_null_kv > 0 and self.null_kv is not None:
-            nk, nv = repeat(self.null_kv.to(target_dtype), 'h (n r) d -> b h n r d', b=batch, r=2).unbind(dim=-2)
+            nk, nv = repeat(self.null_kv.to(device=device, dtype=target_dtype), 'h (n r) d -> b h n r d', b=batch,
+                            r=2).unbind(dim=-2)
             k = torch.cat((nk, k), dim=-2)
             v = torch.cat((nv, v), dim=-2)
 
         q, k = map(l2norm, (q, k))
-        q = q * self.q_scale.to(target_dtype)
-        k = k * self.k_scale.to(target_dtype)
+        # 修复：对齐 scale 参数的设备
+        q = q * self.q_scale.to(device=device, dtype=target_dtype)
+        k = k * self.k_scale.to(device=device, dtype=target_dtype)
 
         sim = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
         i, j = sim.shape[-2:]
 
+        # 修复：对齐 attn_bias 的设备
         if exists(attn_bias):
-            attn_bias = F.pad(attn_bias.to(target_dtype), (self.num_null_kv, 0), value=0.)
+            attn_bias = F.pad(attn_bias.to(device=device, dtype=target_dtype), (self.num_null_kv, 0), value=0.)
             sim = sim + attn_bias
 
         if exists(mask):
@@ -159,7 +168,7 @@ class Attention(nn.Module):
             sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
 
         if self.causal:
-            sim = sim + self.rel_pos_bias(sim).to(target_dtype)
+            sim = sim + self.rel_pos_bias(sim).to(device=device, dtype=target_dtype)
             causal_mask = torch.ones((i, j), device=device, dtype=torch.bool).triu(j - i + 1)
             sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
@@ -241,7 +250,8 @@ class ContinuousPositionBias(nn.Module):
             self.register_buffer('rel_pos', rel_pos, persistent=False)
 
         target_dtype = next(self.net.parameters()).dtype
-        rel_pos = self.rel_pos.to(target_dtype)
+        # 修复：对齐 rel_pos 的设备
+        rel_pos = self.rel_pos.to(device=next(self.net.parameters()).device, dtype=target_dtype)
         for layer in self.net:
             rel_pos = layer(rel_pos)
         return rearrange(rel_pos, 'i j h -> h i j')
@@ -265,13 +275,18 @@ class Transformer(nn.Module):
     @beartype
     def forward(self, x, video_shape: Tuple[int, int, int, int] = None, attn_bias=None, context=None,
                 self_attn_mask=None, cross_attn_context_mask=None):
+        # 修复：锁定当前模块的真实 device
+        current_device = next(self.norm_out.parameters()).device
         target_dtype = next(self.norm_out.parameters()).dtype
-        x = x.to(target_dtype)
+
+        x = x.to(device=current_device, dtype=target_dtype)
         for peg, self_attn, cross_attn, ff in self.layers:
             if exists(peg):
-                x = peg(x, shape=video_shape).to(target_dtype) + x
-            x = self_attn(x.to(target_dtype), attn_bias=attn_bias, mask=self_attn_mask).to(target_dtype) + x
+                x = peg(x, shape=video_shape).to(device=current_device, dtype=target_dtype) + x
+            x = self_attn(x.to(device=current_device, dtype=target_dtype), attn_bias=attn_bias, mask=self_attn_mask).to(
+                device=current_device, dtype=target_dtype) + x
             if exists(cross_attn) and exists(context):
-                x = cross_attn(x.to(target_dtype), context=context, mask=cross_attn_context_mask).to(target_dtype) + x
-            x = ff(x.to(target_dtype)) + x
+                x = cross_attn(x.to(device=current_device, dtype=target_dtype), context=context,
+                               mask=cross_attn_context_mask).to(device=current_device, dtype=target_dtype) + x
+            x = ff(x.to(device=current_device, dtype=target_dtype)) + x
         return self.norm_out(x)
