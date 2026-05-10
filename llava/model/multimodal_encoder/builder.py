@@ -1,7 +1,7 @@
 import os
 from .clip_encoder import CLIPVisionTower
 
-from .ctclip_encoder import CTClipVisionTower  # <--- 新增导入
+from .ctclip_encoder import CTCLIPVisionTower # <--- 新增导入
 
 
 def build_vision_tower(vision_tower_cfg, **kwargs):
