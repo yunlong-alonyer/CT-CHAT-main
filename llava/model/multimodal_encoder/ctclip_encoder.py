@@ -70,40 +70,35 @@ class CTCLIPVisionTower(nn.Module):
             param.requires_grad = False
 
     def forward(self, images):
-        # 1. 动态获取模型参数的当前精度和设备
-        # 确保输入 images 被推送到与视觉塔相同的设备（如 cuda:0）和精度（BF16）
-        vt_param = next(self.vision_tower.parameters())
-        target_device = vt_param.device
-        target_dtype = vt_param.dtype
+        # 1. 获取主模型期望的精度（通常是 BF16）
+        main_dtype = images.dtype
 
-        # 2. 预处理输入张量
-        # 即使 LLM 传过来的是 BF16，这里再做一次显式转换以防万一
-        images_input = images.to(device=target_device, dtype=target_dtype).contiguous()
+        # 2. 强制将输入转为 Float32，并推送到视觉塔所在的设备
+        # 这样能保证进入 CTViT 的所有数据都是 Float32
+        images_input = images.to(device=self.device, dtype=torch.float32).contiguous()
 
-        # 3. 核心修复点 2：在计算时再次强制精度上下文
+        # 3. 运行视觉塔（全程强制在 Float32 环境下）
         with torch.no_grad():
-            # 使用 autocast 自动处理内部可能存在的精度跳变
-            with torch.amp.autocast('cuda', dtype=target_dtype):
-                # 记录原始 cuDNN 状态，暂时关闭它以绕过 3D 深度卷积在某些版本的 Bug
+            # 暂时关闭 autocast，防止它自动把算子转回 BF16 导致冲突
+            with torch.amp.autocast('cuda', enabled=False):
+                # 记录原始 cuDNN 状态，暂时关闭它以绕过 3D 卷积 Bug
                 cudnn_orig = torch.backends.cudnn.enabled
                 torch.backends.cudnn.enabled = False
 
-                # 提取特征
                 image_features = self.vision_tower(
                     images_input,
                     return_encoded_tokens=True
                 )
 
-                # 立即恢复 cuDNN 状态
                 torch.backends.cudnn.enabled = cudnn_orig
 
-        # 4. 后处理特征维度
+        # 4. 后处理维度
         if image_features.ndim == 5:
-            # (batch, temporal_patches, spatial_h, spatial_w, dim) -> (batch, num_patches, dim)
             image_features = image_features.flatten(1, 3)
 
-        # 确保返回的特征精度与 LLM 期望的精度（通常是 BF16）对齐
-        return image_features.to(dtype=images.dtype)
+        # 5. 核心修复点：将输出结果转回主模型的精度（BF16）
+        # 这样后续的 Projector 和 LLM 拿到的是它们认得的精度
+        return image_features.to(dtype=main_dtype)
 
     @property
     def dummy_feature(self):

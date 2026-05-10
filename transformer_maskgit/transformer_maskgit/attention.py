@@ -29,11 +29,10 @@ class LayerNorm(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.gamma = nn.Parameter(torch.ones(dim))
-        self.register_buffer("beta", torch.zeros(dim))
+        self.beta = nn.Parameter(torch.zeros(dim)) # 统一用 Parameter
 
     def forward(self, x):
-        # 核心修复：显式指定 device=x.device 和 dtype=x.dtype
-        # 这样即使 beta 在 CPU 上，也会被拉到当前 GPU
+        # 动态对齐设备和精度
         return F.layer_norm(
             x,
             x.shape[-1:],
