@@ -5,7 +5,7 @@ export PYTHONPATH="$PWD:$PYTHONPATH"
 #export CUDA_VISIBLE_DEVICES=0
 
 deepspeed --num_gpus 8 llava/train/train_mem.py \
-    --deepspeed ./zero3.json \
+    --deepspeed ./zero2.json \
     --model_name_or_path /home/huali/model/Qwen3.5-9B \
     --version plain \
     --data_path ./dataset_llava_format.json \
