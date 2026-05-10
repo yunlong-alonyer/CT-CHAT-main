@@ -56,7 +56,7 @@ class LlavaMetaModel:
 
         self.config.mm_vision_tower = vision_tower
 
-        """
+
         if self.get_vision_tower() is None:
             vision_tower = build_vision_tower(model_args)
 
@@ -70,7 +70,7 @@ class LlavaMetaModel:
             else:
                 vision_tower = self.vision_tower
             vision_tower.load_model()
-        """
+
         self.config.use_mm_proj = True
         self.config.mm_projector_type = getattr(model_args, 'mm_projector_type', 'linear')
         self.config.mm_hidden_size = 512
