@@ -68,23 +68,30 @@ class CTCLIPVisionTower(nn.Module):
     def forward(self, images):
         # 接收形状: [Batch, Channel, Depth, Height, Width]
         with torch.no_grad():
-            # 1. 动态获取当前视觉塔的精度 (这里已被我们设置成了 FP32)
+            # --- 核心修复开始 ---
+            # 记录原始 cuDNN 状态，并暂时关闭它
+            # 这能完美绕过 cuDNN 针对 bfloat16 3D 深度卷积的底层 Bug
+            cudnn_orig = torch.backends.cudnn.enabled
+            torch.backends.cudnn.enabled = False
+
+            # 动态获取精度，并确保张量在内存中是连续的 (Contiguous)
             vt_dtype = next(self.vision_tower.parameters()).dtype
+            images_input = images.to(vt_dtype).contiguous()
 
-            # 2. 将输入的图像强行对齐到视觉塔的精度 (FP16 -> FP32)
-            images_input = images.to(vt_dtype)
-
-            # 3. 提取特征 (在 FP32 下安全运行，不会报硬编码 float 错误)
+            # 提取特征 (此时使用 PyTorch 原生内核安全运行)
             image_features = self.vision_tower(
                 images_input,
                 return_encoded_tokens=True
             )
 
+            # 立即恢复 cuDNN 状态，确保后续 Qwen 语言模型的训练速度不受影响！
+            torch.backends.cudnn.enabled = cudnn_orig
+            # --- 核心修复结束 ---
+
             if image_features.ndim == 5:
                 image_features = image_features.flatten(1, 3)
 
-             # 4. 将输出特征强行转回外部大模型的精度 (FP32 -> FP16)，无缝交接给 Projector
-            # fallback 取 images 的原精度即可 (即最开始传进来的 FP16)
+            # 将输出特征强行转回外部大模型的精度
             return image_features.to(images.dtype)
 
     @property
