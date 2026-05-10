@@ -1,6 +1,3 @@
-cat << 'EOF' > pretrain_qwen.sh
-#!/bin/bash
-
 # 将当前工作目录加入 Python 寻址路径，解决 llava 模块找不到的问题
 export PYTHONPATH="$PWD:$PYTHONPATH"
 
@@ -39,8 +36,3 @@ python llava/train/train_mem.py \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to none
-EOF
-
-# 赋予执行权限并启动训练
-chmod +x pretrain_qwen.sh
-./pretrain_qwen.sh
