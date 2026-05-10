@@ -28,7 +28,7 @@ class LlavaQwenConfig(AutoConfig):
 
 
 # 2. 多重继承：继承正确的 Qwen3_5 基类
-class LlavaQwenForCausalLM(Qwen3_5ForConditionalGeneration, LlavaMetaForCausalLM):
+class LlavaQwenForCausalLM(Qwen3_5ForConditionalGeneration, LlavaMetaForCausalLM,LlavaMetaModel):
     config_class = LlavaQwenConfig
 
     def __init__(self, config):
