@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import os
+# 注意：确保你的环境里能正确 import transformer_maskgit
 from transformer_maskgit.ctvit import CTViT
 
 
@@ -11,9 +12,12 @@ class CTCLIPVisionTower(nn.Module):
         self.vision_tower_name = "ctclip"
         self.vision_tower_path = vision_tower_path
 
+        # 1. 尝试从不同渠道获取权重路径
         if self.vision_tower_path is None:
             self.vision_tower_path = getattr(args, 'vision_tower_path', None)
 
+        # 2. 初始化 CT-CLIP v2 核心架构
+        # 注意：image_size 必须固定为 224 以匹配权重
         self.vision_tower = CTViT(
             dim=768,
             codebook_size=8192,
@@ -25,55 +29,71 @@ class CTCLIPVisionTower(nn.Module):
             heads=12,
             channels=1
         )
+
+        # CT-CLIP v2 的特征维度是 768
         self.hidden_size = 768
+
         if self.vision_tower_path:
             self.load_model()
 
     def load_model(self):
-        if self.is_loaded: return
+        if self.is_loaded:
+            return
+
         if os.path.exists(self.vision_tower_path):
             print(f"[*] 正在加载 CT-CLIP 预训练权重: {self.vision_tower_path}")
             ckpt = torch.load(self.vision_tower_path, map_location="cpu")
+
+            # 清洗权重字典的前缀
             state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
             vision_state_dict = {k.replace('visual.', ''): v for k, v in state_dict.items() if
                                  'visual' in k or 'transformer' in k}
-            self.vision_tower.load_state_dict(vision_state_dict, strict=False)
-            print("[*] CT-CLIP 权重加载成功！")
 
-            # --- 隔离区核心 1：强制整个模块到 Float32 并冻结 ---
+            try:
+                self.vision_tower.load_state_dict(vision_state_dict, strict=False)
+                print("[*] CT-CLIP 权重加载成功！")
+            except Exception as e:
+                print(f"[!] 权重加载过程中出现部分不匹配 (通常是投射层): {e}")
+
+            # --- 核心修复 1：强制隔离为 Float32 ---
+            # 视觉塔内部含有 VQ 库，必须强制在 FP32 下运行以避免底层算子精度冲突
             self.vision_tower.float()
             self.is_loaded = True
         else:
-            print(f"[!] 未找到权重，使用随机初始化！")
+            print(f"[!] 未找到路径 {self.vision_tower_path}，视觉塔将保持随机初始化状态运行！")
             self.vision_tower.float()
 
+        # 3. 冻结参数：预训练适配器阶段不需要更新视觉塔权重
         for param in self.vision_tower.parameters():
             param.requires_grad = False
 
     def forward(self, images):
-        # 1. 记录主模型期望的原始精度（BF16）
+        """
+        images 形状: [Batch, 1, 32, 224, 224] (通常来自 LLM 侧，精度可能是 BF16)
+        """
+        # 1. 记录原始精度 (通常是 BFloat16)
         main_dtype = images.dtype
 
-        # 2. 检查设备：DeepSpeed 可能会移动 vision_tower
-        target_device = next(self.vision_tower.parameters()).device
+        # 2. 动态获取当前子显卡设备
+        # 在多卡 DDP 环境下， images 已经在对应的 GPU 上，我们需要确保 vision_tower 在同一张卡上
+        target_device = images.device
 
-        # 3. 核心隔离逻辑：强制将输入转为 Float32
-        # 即使外部是 BF16，进入视觉塔的必须是 Float32
+        # 3. --- 核心修复 2：精度转换与对齐 ---
+        # 无论外部是什么精度，强制将输入转为 Float32 送入视觉塔
         images_input = images.to(device=target_device, dtype=torch.float32).contiguous()
 
-        # 4. 强制视觉塔权重保持在 Float32
-        # (防止某些 Trainer 在运行过程中又偷偷把模型转回 BF16)
+        # 二次确认权重没有被某些框架偷偷转回 BF16
         if next(self.vision_tower.parameters()).dtype != torch.float32:
             self.vision_tower.float()
 
         with torch.no_grad():
-            # 5. 关键：关闭 autocast！
-            # 防止 BF16 的全局开关自动把视觉塔内部算子降级回 BF16
+            # 必须关闭 autocast，否则 amp 会在计算过程中自动把部分算子转回 BF16 导致 VQ 库报错
             with torch.amp.autocast('cuda', enabled=False):
-                # 记录原始 cuDNN 状态并暂时关闭（绕过 3D 卷积 Bug）
+                # 关闭 cuDNN 以绕过某些 3D 卷积的底层版本 Bug
                 cudnn_orig = torch.backends.cudnn.enabled
                 torch.backends.cudnn.enabled = False
 
+                # 调用底层 CTViT
                 image_features = self.vision_tower(
                     images_input,
                     return_encoded_tokens=True
@@ -81,16 +101,18 @@ class CTCLIPVisionTower(nn.Module):
 
                 torch.backends.cudnn.enabled = cudnn_orig
 
-        # 6. 后处理
+        # 4. 后处理特征维度
+        # 将 3D 特征块展平为序列: [B, T, H, W, D] -> [B, T*H*W, D]
         if image_features.ndim == 5:
             image_features = image_features.flatten(1, 3)
 
-        # 7. 核心隔离逻辑：出口处转回 BF16
-        # 这样中间的 Projector 拿到的依然是它认得的 BF16，无缝衔接
+        # 5. --- 核心修复 3：精度写回 ---
+        # 将输出强制转换回 main_dtype (BF16)，以便无缝对接后续的 Projector 和 LLM
         return image_features.to(dtype=main_dtype)
 
     @property
     def dummy_feature(self):
+        # 辅助函数，用于架构初始化时的占位
         return torch.zeros(1, self.hidden_size, device=self.device, dtype=torch.float32)
 
     @property

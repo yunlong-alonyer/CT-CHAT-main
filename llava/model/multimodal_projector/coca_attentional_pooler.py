@@ -3,10 +3,7 @@ from torch import nn, einsum
 from typing import Callable
 from einops import rearrange, repeat
 from einops_exts import rearrange_many
-
-# 核心修改：从独立的 registor 文件导入
 from .registor import Registor
-
 
 class AttentionalPooler(nn.Module):
     def __init__(self, d_model: int, context_dim: int, n_head: int = 8, n_queries: int = 256):
@@ -17,8 +14,7 @@ class AttentionalPooler(nn.Module):
         self.heads = n_head
         inner_dim = dim_head * n_head
 
-        # 这里的 context_dim 必须是 768
-        self.ln_k = nn.LayerNorm(context_dim)
+        self.ln_k = nn.LayerNorm(context_dim) # 这里会自动设为 768
         self.ln_q = nn.LayerNorm(d_model)
 
         self.to_q = nn.Linear(d_model, inner_dim, bias=False)
@@ -28,37 +24,28 @@ class AttentionalPooler(nn.Module):
     def forward(self, x: torch.Tensor):
         if x.ndim == 3:
             x = rearrange(x, 'b n d -> b 1 n d')
-
         q = repeat(self.query, 'n d -> b m n d', b=x.shape[0], m=x.shape[1])
         x = self.ln_k(x)
         q = self.ln_q(q)
-
         b, m, h = *x.shape[:2], self.heads
         q = self.to_q(q)
         k, v = self.to_kv(x).chunk(2, dim=-1)
-
         q, k, v = rearrange_many((q, k, v), 'b t n (h d) -> b h t n d', h=h)
         q = q * self.scale
-
         sim = einsum('... i d, ... j d -> ... i j', q, k)
         sim = sim - sim.amax(dim=-1, keepdim=True).detach()
         attn = sim.softmax(dim=-1)
-
         out = einsum('... i j, ... j d -> ... i d', attn, v)
         out = rearrange(out, 'b h t n d -> b t n (h d)', h=h)
         return self.to_out(out).squeeze(dim=1)
-
 
 @Registor.register("coca_pooler")
 class AttentionalPoolProjector(nn.Module):
     def __init__(self, config, projector=None, n_head=8, n_queries=256):
         super().__init__()
-        # 动态读取维度：Qwen(4096), CT-CLIP(768)
         embed_dim = getattr(config, "hidden_size", 4096)
         context_dim = getattr(config, "mm_hidden_size", 768)
-
-        self.attn_pool = AttentionalPooler(d_model=embed_dim, context_dim=context_dim, n_head=n_head,
-                                           n_queries=n_queries)
+        self.attn_pool = AttentionalPooler(d_model=embed_dim, context_dim=context_dim, n_head=n_head, n_queries=n_queries)
         self.ln = nn.LayerNorm(embed_dim)
         self.proj = projector if projector else nn.Identity()
 
