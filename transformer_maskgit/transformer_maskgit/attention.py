@@ -32,7 +32,8 @@ class LayerNorm(nn.Module):
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x):
-        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
+        # 强制将 gamma 和 beta 转换为与 x 相同的精度 (如 bfloat16)
+        return F.layer_norm(x, x.shape[-1:], self.gamma.to(x.dtype), self.beta.to(x.dtype))
 
 # feedforward
 
