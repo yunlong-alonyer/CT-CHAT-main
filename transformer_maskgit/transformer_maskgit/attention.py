@@ -291,7 +291,7 @@ class ContinuousPositionBias(nn.Module):
         rel_pos = self.rel_pos.to(torch.float32)
 
         for layer in self.net:
-            rel_pos = layer(rel_pos.float())
+            rel_pos = layer(rel_pos.to(torch.bfloat16))
 
         return rearrange(rel_pos, 'i j h -> h i j')
 
