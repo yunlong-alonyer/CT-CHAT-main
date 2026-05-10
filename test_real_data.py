@@ -182,7 +182,7 @@ multimodal_cfg = {
 for k, v in multimodal_cfg.items():
     setattr(raw_config, k, v)
 
-print("[*] 正在初始化 LlavaQwenForCausalLM 模型架构...")
+print("[*] 正在初始化 123LlavaQwenForCausalLM 模型架构...")
 model = LlavaQwenForCausalLM.from_pretrained(
     QWEN_DIR, config=raw_config, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
 )
