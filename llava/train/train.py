@@ -109,9 +109,7 @@ class DataArguments:
     is_multimodal: bool = False
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
-    # --- 新增以下两行 ---
-    mm_use_im_start_end: bool = field(default=False)
-    mm_use_im_patch_token: bool = field(default=False)
+    
 
 
 @dataclass
