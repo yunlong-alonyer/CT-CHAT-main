@@ -6,30 +6,33 @@ from transformer_maskgit.ctvit import CTViT
 
 
 class CTCLIPVisionTower(nn.Module):
-    def __init__(self, config):
+    def __init__(self, vision_tower_path, args, **kwargs):
         super().__init__()
-        self.config = config
         self.is_loaded = False
 
-        # 从配置中读取权重路径
-        self.vision_tower_name = getattr(config, 'mm_vision_tower', 'ctclip')
-        self.vision_tower_path = getattr(config, 'vision_tower_path', None)
+        # 1. 直接使用 builder 传进来的路径
+        self.vision_tower_name = "ctclip"
+        self.vision_tower_path = vision_tower_path
 
-        # 初始化 CT-CLIP 的 3D ViT
-        # 注意：这里的 dim, depth, heads 必须与你训练 CT-CLIP 时的配置一致
+        # 如果 builder 没传路径过来，尝试从 args 配置里读（兜底逻辑）
+        if self.vision_tower_path is None:
+            self.vision_tower_path = getattr(args, 'vision_tower_path', None)
+
+        # 2. 初始化 CT-CLIP 的 3D ViT
+        # (保持原有的 CTViT 配置不变)
         self.vision_tower = CTViT(
             dim=768,
-            codebook_size=8192,  # <-- 新增 (CTViT强制要求，通常VQGAN使用 8192 或 16384)
+            codebook_size=8192,
             image_size=240,
             patch_size=16,
-            temporal_patch_size=2,  # <-- 新增 (CTViT强制要求，表示在Z轴上多少个切片作为一个patch)
-            spatial_depth=12,  # <-- 修改：原先的 depth 替换为 spatial_depth
-            temporal_depth=4,  # <-- 新增 (CTViT强制要求，时间/Z轴的Transformer层数)
+            temporal_patch_size=2,
+            spatial_depth=12,
+            temporal_depth=4,
             heads=12,
-            channels=1  # <-- 修改：原先的 num_channels 替换为 channels
+            channels=1
         )
 
-        self.hidden_size = 768  # 这是 CTViT 输出的维度，对应 config.mm_hidden_size
+        self.hidden_size = 768
 
         if self.vision_tower_path:
             self.load_model()
