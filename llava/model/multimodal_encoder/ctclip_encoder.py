@@ -66,17 +66,17 @@ class CTCLIPVisionTower(nn.Module):
             param.requires_grad = False
 
     def forward(self, images):
-        # 动态获取模型参数的目标精度 (应该是 torch.bfloat16)
+        # 1. 动态获取模型参数的目标精度 (当前是 bfloat16)
         vt_dtype = next(self.vision_tower.parameters()).dtype
 
-        # 1. 确保输入张量连续且类型正确
+        # 2. 确保输入张量连续且类型一致
         images_input = images.to(vt_dtype).contiguous()
 
-        # 2. 核心修复：使用 torch.amp.autocast 强制统一整个视觉塔的计算精度
-        # 这将自动解决内部所有乱七八糟的 .float() 导致的冲突
+        # 3. 核心修复：使用 torch.amp.autocast 强制统一计算精度！
+        # 这个上下文管理器将自动解决内部所有硬编码 .float() 导致的冲突
         with torch.no_grad():
             with torch.amp.autocast('cuda', dtype=vt_dtype):
-                # 记录原始 cuDNN 状态，并暂时关闭它以绕过 3D 深度卷积 Bug
+                # 记录原始 cuDNN 状态，暂时关闭它以绕过 3D 深度卷积 Bug
                 cudnn_orig = torch.backends.cudnn.enabled
                 torch.backends.cudnn.enabled = False
 
@@ -92,6 +92,7 @@ class CTCLIPVisionTower(nn.Module):
         if image_features.ndim == 5:
             image_features = image_features.flatten(1, 3)
 
+        # 确保输出强制转为大模型所期望的精度
         return image_features.to(images.dtype)
 
     @property
