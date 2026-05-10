@@ -109,7 +109,7 @@ class DataArguments:
     is_multimodal: bool = False
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
-    
+
 
 
 @dataclass
@@ -926,7 +926,9 @@ class LazySupervisedDataset(Dataset):
         resized_data = resize_array(tensor, current_spacing, target_spacing)[0][0]
 
         # 6. 中心裁剪/填充到 (32, 240, 240)
-        target_shape = (32, 240, 240)
+        #target_shape = (32, 240, 240)
+        # 修改为更省显存的尺寸：
+        target_shape = (16, 224, 224)
         tensor = torch.tensor(resized_data)
         d, h, w = tensor.shape
         td, th, tw = target_shape
@@ -958,8 +960,8 @@ class LazySupervisedDataset(Dataset):
                 embedding = self.nii_img_to_tensor(full_path)
             except Exception as e:
                 print(f"读取文件 {full_path} 失败: {e}")
-                embedding = torch.zeros(1, 32, 240, 240)
-
+                #embedding = torch.zeros(1, 32, 240, 240)
+                embedding = torch.zeros(1, 16, 224, 224)
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
                 self.data_args)

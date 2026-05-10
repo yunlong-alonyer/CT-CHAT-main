@@ -23,7 +23,7 @@ class CTCLIPVisionTower(nn.Module):
         self.vision_tower = CTViT(
             dim=768,
             codebook_size=8192,
-            image_size=240,
+            image_size=224,  # <--- 从 240 改为 224
             patch_size=16,
             temporal_patch_size=2,
             spatial_depth=12,
