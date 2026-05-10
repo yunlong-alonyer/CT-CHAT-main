@@ -288,10 +288,12 @@ class ContinuousPositionBias(nn.Module):
 
             self.register_buffer('rel_pos', rel_pos, persistent = False)
 
-        rel_pos = self.rel_pos.to(torch.float32)
+        # 获取当前网络层真实的 dtype (可能是 float32，也可能是 bfloat16)
+        target_dtype = next(self.net.parameters()).dtype
+        rel_pos = self.rel_pos.to(target_dtype)
 
         for layer in self.net:
-            rel_pos = layer(rel_pos.to(torch.bfloat16))
+            rel_pos = layer(rel_pos)
 
         return rearrange(rel_pos, 'i j h -> h i j')
 
