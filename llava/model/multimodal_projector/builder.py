@@ -3,6 +3,7 @@ import torch.nn as nn
 import re
 from .coca_attentional_pooler import AttentionalPoolProjector
 
+from .registor import Registor
 
 class IdentityMap(nn.Module):
     def __init__(self):
@@ -34,6 +35,15 @@ class SimpleResBlock(nn.Module):
 
 def build_vision_projector(config, delay_load=False, **kwargs):
     projector_type = getattr(config, 'mm_projector_type', 'linear')
+
+    # 从注册器中获取类
+    projector_cls = Registor.get(projector_type)
+    if projector_cls is not None:
+        return projector_cls(config, **kwargs)
+
+    # 如果没有在注册器中，走原有的 LLaVA 逻辑
+    if projector_type == 'linear':
+        return nn.Linear(config.mm_hidden_size, config.hidden_size)
 
     # =====================================================================
     # 核心修改 1：动态获取目标语言模型的隐藏层维度
