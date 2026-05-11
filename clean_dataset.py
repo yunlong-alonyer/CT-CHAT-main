@@ -6,44 +6,54 @@ import numpy as np
 from tqdm import tqdm
 
 # ================= 配置区 =================
-# 输入你原始的、包含问题的 JSON 文件
 INPUT_JSON = "finetune_data_thinking.json"
-# 输出清洗后、可直接用于训练的 JSON 文件
 OUTPUT_JSON = "finetune_data_clean.json"
-# 请务必填写与 finetune_qwen.sh 中 --image_folder 一致的路径
 IMAGE_FOLDER = "../CT-CLIP-main/dataset/pretrain_processed_train_data"
+
+
 # ==========================================
 
 def check_nii_validity(nii_path):
     """
-    同步 train.py 中的 nii_img_to_tensor 逻辑，
-    捕获导致 'axes don't match array' 的异常文件。
+    不仅检查文件可读性，还要模拟 train.py 的重采样计算，确保维度不会坍塌为 0
     """
     try:
-        # 1. 尝试加载 NIfTI 文件
-        nii_img = nib.load(str(nii_path))
-        img_data = nii_img.get_fdata()
+        # 1. 强力过滤定位片 (Scout)
+        if "scout" in nii_path.lower():
+            return False, "定位片 (Scout) 已跳过"
 
-        # 2. 检查维度 (核心检查点)
-        # 报错 'axes don't match' 通常是因为 transpose(2, 0, 1) 要求数组必须是 3 维
-        # 如果文件是 2 维或 4 维 (例如带通道或时间轴)，这里会直接报错
-        try:
-            _ = img_data.transpose(2, 0, 1)
-        except ValueError:
-            return False, f"维度不匹配 (shape={img_data.shape}, 无法执行 transpose(2,0,1))"
+        # 2. 尝试加载
+        img = nib.load(nii_path)
+        img_data = img.get_fdata()
 
-        # 3. 检查是否存在 NaN (避免训练 Loss 变成 NaN)
+        # 3. 维度检查
+        # 正常 3D NIfTI 在 nibabel 中通常是 (W, H, D)
+        if len(img_data.shape) != 3:
+            return False, f"维度异常: {img_data.shape}"
+
+        # 4. 模拟重采样计算逻辑 (同步 train.py)
+        zooms = img.header.get_zooms()
+        # train.py 顺序: current_spacing = (zooms[2], zooms[0], zooms[1]) -> (Z, X, Y)
+        # target_spacing = (1.5, 0.75, 0.75)
+        d, w, h = img_data.shape[2], img_data.shape[0], img_data.shape[1]
+
+        new_d = int(d * (zooms[2] / 1.5))
+        new_w = int(w * (zooms[0] / 0.75))
+        new_h = int(h * (zooms[1] / 0.75))
+
+        if new_d <= 0:
+            return False, f"深度重采样后归零 (原深度:{d}, 间距:{zooms[2]:.2f})"
+        if new_w <= 0 or new_h <= 0:
+            return False, f"宽/高重采样后归零"
+
+        # 5. 检查 NaN
         if np.isnan(img_data).any():
-            return False, "文件包含 NaN 值"
-
-        # 4. 模拟重采样前的基本属性检查
-        zooms = nii_img.header.get_zooms()
-        if len(zooms) < 3:
-            return False, f"Header 信息缺失 (zooms={zooms})"
+            return False, "包含 NaN"
 
         return True, "OK"
     except Exception as e:
         return False, str(e)
+
 
 def main():
     if not os.path.exists(INPUT_JSON):
@@ -53,57 +63,41 @@ def main():
     with open(INPUT_JSON, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    print(f"开始清洗数据集，原始样本总数: {len(data)}")
+    print(f"开始清洗数据集，原始总数: {len(data)}")
 
     clean_data = []
     bad_count = 0
     error_summary = {}
 
     for item in tqdm(data):
-        # 获取图像路径
-        img_relative_path = item.get("image", "")
-        if not img_relative_path:
-            bad_count += 1
-            error_msg = "JSON 条目缺失 image 字段"
-            error_summary[error_msg] = error_summary.get(error_msg, 0) + 1
-            continue
-
+        img_relative_path = item["image"]
         img_absolute_path = os.path.join(IMAGE_FOLDER, img_relative_path)
 
-        # 1. 检查物理文件是否存在
         if not os.path.exists(img_absolute_path):
             bad_count += 1
-            error_msg = "物理文件不存在"
-            error_summary[error_msg] = error_summary.get(error_msg, 0) + 1
+            error_summary["文件缺失"] = error_summary.get("文件缺失", 0) + 1
             continue
 
-        # 2. 检查文件内部结构是否合规
         is_valid, reason = check_nii_validity(img_absolute_path)
 
         if is_valid:
             clean_data.append(item)
         else:
             bad_count += 1
-            # 简化错误分类以便统计
-            category = reason if "维度" in reason else ("读取失败: " + reason[:30])
-            error_summary[category] = error_summary.get(category, 0) + 1
+            # 分类统计错误
+            cat = reason.split(":")[0]
+            error_summary[cat] = error_summary.get(cat, 0) + 1
 
-    # 保存清洗后的 JSON
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
         json.dump(clean_data, f, ensure_ascii=False, indent=2)
 
-    print("\n" + "=" * 50)
-    print(f"清洗完成！统计结果如下：")
-    print(f" - 保留有效数据: {len(clean_data)} 条")
-    print(f" - 剔除问题数据: {bad_count} 条")
-    print("-" * 50)
-    print("错误类型细分:")
+    print("\n" + "=" * 40)
+    print(f"清洗完成！保留: {len(clean_data)} 条 | 剔除: {bad_count} 条")
+    print("-" * 40)
     for msg, count in error_summary.items():
-        print(f"  * {msg}: {count} 个")
-    print("-" * 50)
-    print(f"结果已保存至: {OUTPUT_JSON}")
-    print("请修改 finetune_qwen.sh 中的 --data_path 为此文件路径后重新开始训练。")
-    print("=" * 50)
+        print(f" - {msg}: {count} 个")
+    print("=" * 40)
+
 
 if __name__ == "__main__":
     main()
