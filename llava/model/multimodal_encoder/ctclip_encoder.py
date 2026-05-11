@@ -48,6 +48,7 @@ class CTCLIPVisionTower(nn.Module):
             except Exception as e:
                 print(f"[!] 权重加载过程中出现部分不匹配: {e}")
 
+            # 初始化时统一设为 FP32 (兼容你之前的预训练习惯)
             self.vision_tower.float()
             self.is_loaded = True
         else:
@@ -61,17 +62,27 @@ class CTCLIPVisionTower(nn.Module):
         main_dtype = images.dtype
         target_device = images.device
 
-        # 完全保留你预训练时的逻辑：强制输入为 Float32
-        images_input = images.to(device=target_device, dtype=torch.float32).contiguous()
+        # 【动态自适应核心】
+        # 读取底层真实参数精度。ZeRO-2预训练时它是FP32，ZeRO-3微调时它被引擎改成了BF16
+        vision_dtype = next(self.vision_tower.parameters()).dtype
 
-        # 【完美兼容的核心修改】
-        # 这行代码在 ZeRO-2 预训练时是极速的空操作 (No-op)；
-        # 在 ZeRO-3 微调时，它会强行把遗留在 CPU 上的 VQ 密码本 (Buffer) 抓进 GPU，并确保是 FP32。
-        self.vision_tower.to(device=target_device, dtype=torch.float32)
+        # 1. 解决 CPU Buffer 遗留：强制将整个视觉塔（含密码本）同步到当前 GPU 及正确的精度
+        self.vision_tower.to(device=target_device, dtype=vision_dtype)
+
+        # 2. 解决 Float/BF16 冲突：图像输入严丝合缝地对齐底层的真实精度
+        images_input = images.to(device=target_device, dtype=vision_dtype).contiguous()
 
         with torch.no_grad():
-            # 完全保留你预训练时的逻辑：关闭 autocast 防止内部算子被切回 BF16
-            with torch.amp.autocast('cuda', enabled=False):
+            from contextlib import nullcontext
+
+            # ZeRO-2 跑预训练 (FP32) 时，按原逻辑关闭混合精度
+            # ZeRO-3 跑微调 (BF16) 时，顺应系统混合精度
+            if vision_dtype == torch.float32:
+                context = torch.amp.autocast('cuda', enabled=False)
+            else:
+                context = nullcontext()
+
+            with context:
                 cudnn_orig = torch.backends.cudnn.enabled
                 torch.backends.cudnn.enabled = False
 
