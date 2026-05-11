@@ -23,7 +23,6 @@ deepspeed --num_gpus 8 llava/train/train_mem.py \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 4 \
-    --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 500 \
     --save_total_limit 2 \
