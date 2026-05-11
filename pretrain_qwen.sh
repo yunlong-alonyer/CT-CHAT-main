@@ -18,7 +18,7 @@ deepspeed --num_gpus 8 llava/train/train_mem.py \
     --mm_use_im_patch_token False \
     --mm_hidden_size 768 \
     --bf16 True \
-    --output_dir ./checkpoints/qwen-ct-pretrain \
+    --output_dir ./checkpoints/test_qwen-ct-pretrain \
     --num_train_epochs 3 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
