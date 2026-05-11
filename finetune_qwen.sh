@@ -5,7 +5,7 @@ export PYTHONPATH="$PWD:$PYTHONPATH"
 # 推荐使用 zero3.json 以应对 Qwen 较大的显存占用
 deepspeed --num_gpus 8 llava/train/train_mem.py \
     --lora_enable True --lora_r 128 --lora_alpha 256 --mm_projector_lr 2e-5 \
-    --deepspeed ./zero3.json \
+    --deepspeed ./zero2.json \
     --model_name_or_path /home/huali/model/Qwen3.5-9B \
     --version qwen \
     --data_path ./finetune_data_thinking.json \
