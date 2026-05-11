@@ -5,7 +5,7 @@ from transformers import AutoConfig
 from llava.model.multimodal_encoder.builder import build_vision_tower
 from llava.model.multimodal_projector.builder import build_vision_projector
 
-# 0. 设定 Qwen3.5 模型路径和 CT-CLIP 路径
+# 0. 设定 Qwen3.5 模型路径和 CT-CLIP 路径1
 QWEN_MODEL_PATH = "./pretrained_models/Qwen-VL"  # 请替换为你实际的本地 Qwen3.5 文件夹名
 CT_CLIP_PATH = "./pretrained_models/Qwen-VL/CT-CLIP_v2.pt"  # 请替换为真实的 CT-CLIP 模型路径
 
