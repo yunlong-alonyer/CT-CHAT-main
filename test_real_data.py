@@ -160,7 +160,6 @@ if os.path.exists(PROJECTOR_WEIGHTS_PATH):
             state_dict[k] = v
 
     # 3. 加载到模型中
-    # 建议先设置 strict=False 看看能否跑通，如果没问题再改回 True
     msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
     print(f"[*] 适配器权重加载结果: {msg}")
     print("[*] 适配器权重加载成功！")
@@ -178,7 +177,8 @@ model.cuda()
 model.eval()
 
 # 准备文本输入
-prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：前面的是一段经过3d编码器的CT图像。请简单告诉我你看到了什么。"
+#prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：前面的是一段经过3d编码器的CT图像。请简单告诉我你看到了什么。"
+prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告。"
 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
 
 # 准备影像

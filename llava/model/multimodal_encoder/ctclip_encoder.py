@@ -6,15 +6,15 @@ from transformer_maskgit.ctvit import CTViT
 
 
 class CTCLIPVisionTower(nn.Module):
-    def __init__(self, vision_tower_path, args, **kwargs):
+    def __init__(self, vision_tower_name, args, **kwargs):
         super().__init__()
         self.is_loaded = False
-        self.vision_tower_name = "ctclip"
-        self.vision_tower_path = vision_tower_path
+        self.vision_tower_name = vision_tower_name
+        self.vision_tower_path = getattr(args, 'vision_tower_path', None)
 
-        # 1. 尝试从不同渠道获取权重路径
+        # 兜底逻辑：如果配置里没写 vision_tower_path，再把名字当路径试一试
         if self.vision_tower_path is None:
-            self.vision_tower_path = getattr(args, 'vision_tower_path', None)
+            self.vision_tower_path = vision_tower_name
 
         # 2. 初始化 CT-CLIP v2 核心架构
         # 注意：image_size 必须固定为 224 以匹配权重
