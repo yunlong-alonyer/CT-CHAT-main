@@ -1172,13 +1172,17 @@ def train(attn_implementation=None):
         else:
             conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
     else:
+        special_tokens_dict = {}
         if tokenizer.pad_token is None:
-            print(f"Adding pad token as '<pad>'")
-            smart_tokenizer_and_embedding_resize(
-                special_tokens_dict=dict(pad_token="<pad>"),
-                tokenizer=tokenizer,
-                model=model,
-            )
+            special_tokens_dict["pad_token"] = "<|endoftext|>"
+        # 强制加入思考标签
+        special_tokens_dict["additional_special_tokens"] = ["<think>", "</think>"]
+
+        smart_tokenizer_and_embedding_resize(
+            special_tokens_dict=special_tokens_dict,
+            tokenizer=tokenizer,
+            model=model,
+        )
         if model_args.version in conversation_lib.conv_templates:
             conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
         else:

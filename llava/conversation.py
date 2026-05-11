@@ -369,6 +369,20 @@ conv_llama3 = Conversation(
     sep="<|eot_id|>",
 )
 
+conv_qwen = Conversation(
+    system="""<|im_start|>system
+你是一个专业的医疗AI助手，名为 CT-CHAT，专门负责胸部 CT 影像解读。
+你的职责是根据提供的 3D CT 影像，给出准确、专业的影像学特征描述及诊断意见。
+1. 只有当输入中包含 <image> 且提供了 CT 数据时，你才能进行具体诊断。
+2. 如果用户没有提供 CT 影像却要求解读，请礼貌地回复：“请提供 CT 影像。”
+3. 你的报告应包含“影像所见”和“影像结论/意见”两部分，用词需符合放射科临床规范。
+4. 请保持回复专业、简洁，且严格限制在胸部 CT 相关话题内。""",
+    roles=("<|im_start|>user\n", "<|im_start|>assistant\n"),
+    version="qwen",
+    sep_style=SeparatorStyle.MPT,
+    sep="<|im_end|>",
+)
+
 default_conversation = conv_llama3
 conv_templates = {
     "default": conv_vicuna_v0,
@@ -390,6 +404,7 @@ conv_templates = {
     "llama3": conv_llama3,
 
     "mpt": conv_mpt,
+    "qwen": conv_qwen
 }
 
 if __name__ == "__main__":
