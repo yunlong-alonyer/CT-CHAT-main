@@ -378,6 +378,8 @@ conv_qwen = Conversation(
 3. 你的报告应包含“影像所见”和“影像结论/意见”两部分，用词需符合放射科临床规范。
 4. 请保持回复专业、简洁，且严格限制在胸部 CT 相关话题内。""",
     roles=("<|im_start|>user\n", "<|im_start|>assistant\n"),
+    messages=(),   # <---初始化为空消息列表
+    offset=0,      # <---初始化偏移量为 0
     version="qwen",
     sep_style=SeparatorStyle.MPT,
     sep="<|im_end|>",
