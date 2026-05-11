@@ -48,15 +48,12 @@ class CTCLIPVisionTower(nn.Module):
             except Exception as e:
                 print(f"[!] 权重加载过程中出现部分不匹配: {e}")
 
-            # 保留你预训练时原有的逻辑：尝试转为 FP32
-            # 在 Zero-2 下它会生效，但在 Zero-3 下它会被 DeepSpeed 底层转回 BF16
             self.vision_tower.float()
             self.is_loaded = True
         else:
             print(f"[!] 未找到路径 {self.vision_tower_path}，视觉塔将保持随机初始化状态运行！")
             self.vision_tower.float()
 
-        # 冻结参数
         for param in self.vision_tower.parameters():
             param.requires_grad = False
 
@@ -64,24 +61,17 @@ class CTCLIPVisionTower(nn.Module):
         main_dtype = images.dtype
         target_device = images.device
 
-        # 【核心自适应修复】：动态获取视觉塔当前的真实数据类型
-        # 预训练 (ZeRO-2) 时，这里会获取到 Float32
-        # 微调 (ZeRO-3) 时，这里会获取到 BFloat16
-        vision_dtype = next(self.vision_tower.parameters()).dtype
+        # 完全保留你预训练时的逻辑：强制输入为 Float32
+        images_input = images.to(device=target_device, dtype=torch.float32).contiguous()
 
-        # 让输入图像严格对齐视觉塔此时的精度，绝不强转
-        images_input = images.to(device=target_device, dtype=vision_dtype).contiguous()
+        # 【完美兼容的核心修改】
+        # 这行代码在 ZeRO-2 预训练时是极速的空操作 (No-op)；
+        # 在 ZeRO-3 微调时，它会强行把遗留在 CPU 上的 VQ 密码本 (Buffer) 抓进 GPU，并确保是 FP32。
+        self.vision_tower.to(device=target_device, dtype=torch.float32)
 
         with torch.no_grad():
-            # 动态上下文：只有在真正 FP32 运行时 (预训练)，才关闭 autocast
-            from contextlib import nullcontext
-            if vision_dtype == torch.float32:
-                context = torch.amp.autocast('cuda', enabled=False)
-            else:
-                context = nullcontext()  # ZeRO-3 微调时顺应默认混合精度
-
-            with context:
-                # 关闭 cuDNN 绕过底层 3D 卷积不兼容
+            # 完全保留你预训练时的逻辑：关闭 autocast 防止内部算子被切回 BF16
+            with torch.amp.autocast('cuda', enabled=False):
                 cudnn_orig = torch.backends.cudnn.enabled
                 torch.backends.cudnn.enabled = False
 
@@ -92,11 +82,9 @@ class CTCLIPVisionTower(nn.Module):
 
                 torch.backends.cudnn.enabled = cudnn_orig
 
-        # 展平特征
         if image_features.ndim == 5:
             image_features = image_features.flatten(1, 3)
 
-        # 最终输出必须转回大模型期望的 main_dtype (通常是 BF16)
         return image_features.to(dtype=main_dtype)
 
     @property
