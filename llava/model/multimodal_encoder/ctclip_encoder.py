@@ -48,7 +48,7 @@ class CTCLIPVisionTower(nn.Module):
             except Exception as e:
                 print(f"[!] 权重加载过程中出现部分不匹配: {e}")
 
-            # 初始化时统一设为 FP32 (兼容你之前的预训练习惯)
+            # 初始化时统一设为 FP32 (兼容预训练逻辑)
             self.vision_tower.float()
             self.is_loaded = True
         else:
@@ -62,21 +62,29 @@ class CTCLIPVisionTower(nn.Module):
         main_dtype = images.dtype
         target_device = images.device
 
-        # 【动态自适应核心】
-        # 读取底层真实参数精度。ZeRO-2预训练时它是FP32，ZeRO-3微调时它被引擎改成了BF16
+        # 获取底层真实参数精度 (ZeRO-3 下是 BFloat16，ZeRO-2 下是 FP32)
         vision_dtype = next(self.vision_tower.parameters()).dtype
 
-        # 1. 解决 CPU Buffer 遗留：强制将整个视觉塔（含密码本）同步到当前 GPU 及正确的精度
-        self.vision_tower.to(device=target_device, dtype=vision_dtype)
+        # ==========================================
+        # 【深度对齐修复】：粉碎 ZeRO-3 的遗漏 bug
+        # ==========================================
+        self.vision_tower.to(device=target_device)
+        for module in self.vision_tower.modules():
+            # 1. 强转所有 Buffer (解决 VQ 的 Float32 密码本崩溃)
+            for k, v in module._buffers.items():
+                if v is not None and v.is_floating_point():
+                    module._buffers[k] = v.to(device=target_device, dtype=vision_dtype)
+            # 2. 保险起见，强转那些没有被规范注册的内部浮点变量
+            for k, v in module.__dict__.items():
+                if isinstance(v, torch.Tensor) and v.is_floating_point():
+                    module.__dict__[k] = v.to(device=target_device, dtype=vision_dtype)
+        # ==========================================
 
-        # 2. 解决 Float/BF16 冲突：图像输入严丝合缝地对齐底层的真实精度
         images_input = images.to(device=target_device, dtype=vision_dtype).contiguous()
 
         with torch.no_grad():
             from contextlib import nullcontext
 
-            # ZeRO-2 跑预训练 (FP32) 时，按原逻辑关闭混合精度
-            # ZeRO-3 跑微调 (BF16) 时，顺应系统混合精度
             if vision_dtype == torch.float32:
                 context = torch.amp.autocast('cuda', enabled=False)
             else:
