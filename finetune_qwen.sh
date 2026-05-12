@@ -8,7 +8,7 @@ deepspeed --num_gpus 8 llava/train/train_mem.py \
     --deepspeed ./zero2.json \
     --model_name_or_path /home/huali/model/Qwen3.5-9B \
     --version qwen \
-    --data_path ./finetune_data_clean.json \
+    --data_path finetune_data_qwen.json \
     --image_folder ../CT-CLIP-main/dataset/pretrain_processed_train_data \
     --vision_tower /home/huali/code/CT-CHAT-main/checkpoint/CT-CLIP_v2.pt \
     --mm_projector_type coca_pooler \
