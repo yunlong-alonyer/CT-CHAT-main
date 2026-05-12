@@ -1,49 +1,27 @@
 import json
-import os
 
-INPUT_JSON = "finetune_data_clean.json"
-OUTPUT_JSON = "finetune_data_clean.json"
+# 1. 加载你当前的清洗后的数据
+with open("finetune_data_clean.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
 
+for item in data:
+    if "image" not in item: continue
 
-def main():
-    if not os.path.exists(INPUT_JSON):
-        print(f"错误: 找不到文件 {INPUT_JSON}")
-        return
+    first_human_found = False
+    for conv in item["conversations"]:
+        # 移除该轮对话中所有的图片标签变体
+        val = conv["value"]
+        val = val.replace("<image>", "").replace("<Image>", "").replace("</Image>", "").strip()
 
-    with open(INPUT_JSON, "r", encoding="utf-8") as f:
-        data = json.load(f)
+        # 仅在第一个 Human 话语前添加唯一的标签
+        if conv["from"] == "human" and not first_human_found:
+            val = "<image>\n" + val
+            first_human_found = True
 
-    fixed_count = 0
+        conv["value"] = val
 
-    for item in data:
-        # 如果没有图像，直接跳过 (通常多模态微调都要有图像)
-        if "image" not in item:
-            continue
+# 2. 覆盖原文件
+with open("finetune_data_clean.json", "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
 
-        # 1. 暴力清除所有对话轮次中原有的图像标签
-        for conv in item["conversations"]:
-            # 清除可能出现的各种变体
-            text = conv["value"]
-            text = text.replace("<image>", "").replace("<Image>", "").replace("</Image>", "")
-            text = text.replace("<image>\n", "").replace("\n<image>", "")
-            conv["value"] = text.strip()
-
-        # 2. 强制在 "human" 的第一句话最前面加上唯一的一个 <image>\n
-        for conv in item["conversations"]:
-            if conv["from"] == "human":
-                conv["value"] = "<image>\n" + conv["value"]
-                break  # 确保只加一次
-
-        fixed_count += 1
-
-    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    print("=" * 40)
-    print(f"文本标签修复完成！共处理: {fixed_count} 条数据")
-    print(f"新文件已保存至: {OUTPUT_JSON}")
-    print("=" * 40)
-
-
-if __name__ == "__main__":
-    main()
+print("修复完成！所有样本现在都只有唯一的 <image> 标签。")
