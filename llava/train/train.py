@@ -49,6 +49,8 @@ import torch.nn.functional as F
 import nibabel as nib
 import pandas as pd
 
+import torch.nn.functional as F
+
 local_rank = None
 
 
@@ -74,14 +76,15 @@ def resize_array(array, current_spacing, target_spacing):
     np.ndarray: Resized array.
     """
     # Calculate new dimensions
+
     original_shape = array.shape[2:]
     scaling_factors = [
         current_spacing[i] / target_spacing[i] for i in range(len(original_shape))
     ]
+    # 🚨 增加 max(1, ...) 保底机制，防止单层定位像在缩放后维度变为 0
     new_shape = [
-        int(original_shape[i] * scaling_factors[i]) for i in range(len(original_shape))
+        max(1, int(original_shape[i] * scaling_factors[i])) for i in range(len(original_shape))
     ]
-    # Resize the array
     resized_array = F.interpolate(array, size=new_shape, mode='trilinear', align_corners=False).cpu().numpy()
     return resized_array
 
@@ -807,6 +810,18 @@ class LazySupervisedDataset(Dataset):
         self.list_data_dict = list_data_dict
         self.data_args = data_args
 
+        # 👇 🚨 严格对齐 1：加载 metadata 用于 HU 值换算 🚨 👇
+        import pandas as pd
+        import os
+        # 默认尝试在 json 文件的同级目录下寻找 train_metadata.csv
+        meta_path = os.path.join(os.path.dirname(data_path), "train_metadata.csv")
+        try:
+            self.df = pd.read_csv(meta_path)
+            rank0_print(f"✅ 成功加载 metadata 用于真实的 HU 换算: {meta_path}")
+        except Exception as e:
+            rank0_print(f"⚠️ 警告: 无法加载 {meta_path}，使用原生 header zooms 兜底。")
+            self.df = pd.DataFrame()
+
     def __len__(self):
         return len(self.list_data_dict)
 
@@ -907,90 +922,153 @@ class LazySupervisedDataset(Dataset):
     #     """
 
     def nii_img_to_tensor(self, path):
+        import nibabel as nib
+        import numpy as np
+        import torch
+
         # 1. 加载 NIfTI
         nii_img = nib.load(str(path))
         img_data = nii_img.get_fdata()
 
-        # 2. 获取间距 (Z, X, Y)
-        zooms = nii_img.header.get_zooms()
-        current_spacing = (zooms[2], zooms[0], zooms[1])  # (Z, X, Y)
+        file_name = str(path).split("/")[-1]
+        file_name_no_ext = file_name.replace(".nii.gz", "")
 
-        # 3. 预处理：截断 HU 值并归一化
-        img_data = np.clip(img_data, -1000, 1000)
-        img_data = (img_data + 1000) / 2000.0  # 归一化到 [0, 1]
+        # 👇 🚨 严格对齐 2：使用 Slope 和 Intercept 还原真实 HU 值 🚨 👇
+        if not self.df.empty:
+            row = self.df[self.df['VolumeName'] == file_name]
+            if row.empty:
+                row = self.df[self.df['VolumeName'] == file_name_no_ext]
 
-        # 4. 调整维度顺序为 (Depth, Height, Width) 并转为 Tensor
-        img_data = img_data.transpose(2, 0, 1)
-        tensor = torch.tensor(img_data, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, D, H, W]
-
-        # 5. 重采样到目标间距 (1.5mm, 0.75mm, 0.75mm)
-        target_spacing = (1.5, 0.75, 0.75)
-        resized_data = resize_array(tensor, current_spacing, target_spacing)[0][0]
-
-        # 6. 中心裁剪/填充到 (32, 240, 240)
-        #target_shape = (32, 240, 240)
-        # 修改为更省显存的尺寸：
-        target_shape = (16, 224, 224)
-        tensor = torch.tensor(resized_data)
-        d, h, w = tensor.shape
-        td, th, tw = target_shape
-
-        d_start, h_start, w_start = max((d - td) // 2, 0), max((h - th) // 2, 0), max((w - tw) // 2, 0)
-        tensor = tensor[d_start:d_start + td, h_start:h_start + th, w_start:w_start + tw]
-
-        # 补齐不足的维度
-        pad_d = max(td - tensor.size(0), 0)
-        pad_h = max(th - tensor.size(1), 0)
-        pad_w = max(tw - tensor.size(2), 0)
-        tensor = F.pad(tensor, (0, pad_w, 0, pad_h, 0, pad_d), value=0)
-
-        return tensor.unsqueeze(0)  # 返回 [1, 32, 240, 240]
-    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        sources = self.list_data_dict[i]
-        if isinstance(i, int):
-            sources = [sources]
-
-        if 'image' in sources[0]:
-            # 现在 image_file 的值已经是 "1237805150010/3052493544...nii.gz"
-            image_file = self.list_data_dict[i]['image']
-            image_folder = self.data_args.image_folder
-
-            # 直接拼接，得到完整的物理路径
-            full_path = os.path.join(image_folder, image_file)
-
-            try:
-                embedding = self.nii_img_to_tensor(full_path)
-            except Exception as e:
-                print(f"读取文件 {full_path} 失败: {e}")
-                #embedding = torch.zeros(1, 32, 240, 240)
-                embedding = torch.zeros(1, 16, 224, 224)
-            sources = preprocess_multimodal(
-                copy.deepcopy([e["conversations"] for e in sources]),
-                self.data_args)
+            if not row.empty:
+                slope = float(row["RescaleSlope"].iloc[0])
+                intercept = float(row["RescaleIntercept"].iloc[0])
+                xy_spacing_str = str(row["XYSpacing"].iloc[0])
+                if "[" in xy_spacing_str:
+                    xy_spacing = float(xy_spacing_str[1:][:-2].split(",")[0])
+                else:
+                    xy_spacing = float(xy_spacing_str.split(",")[0])
+                z_spacing = float(row["ZSpacing"].iloc[0])
+            else:
+                # 查不到表时的兜底
+                zooms = nii_img.header.get_zooms()
+                slope, intercept = 1.0, 0.0
+                z_spacing, xy_spacing = zooms[2], zooms[0]
         else:
-            sources = copy.deepcopy([e["conversations"] for e in sources])
-        #for source in sources:
-            #for s in source:
-                #if s["from"] == "human":
-                   # s["value"] = s["value"] + "<report_generation>" * 120000
-        data_dict = preprocess(
-            sources,
-            self.tokenizer,
-            has_image=('image' in self.list_data_dict[i]))
+            zooms = nii_img.header.get_zooms()
+            slope, intercept = 1.0, 0.0
+            z_spacing, xy_spacing = zooms[2], zooms[0]
 
+        img_data = slope * img_data + intercept
+        # 👆 🚨 对齐结束 🚨 👆
 
-        if isinstance(i, int):
-            data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0])
-        print(data_dict["input_ids"].shape)
-        # image exist in the data
-        if 'image' in self.list_data_dict[i]:
-            data_dict['image'] = embedding
-        #elif self.data_args.is_multimodal:
-        # image does not exist in the data, but the model is multimodal
-        #crop_size = self.data_args.image_processor.crop_size
-        #data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
-        return data_dict
+        # 👇 🚨 严格对齐 3：无尽容错的维度降维结界 🚨 👇
+        while img_data.ndim > 3:
+            img_data = img_data[..., 0]
+        if img_data.ndim == 2:
+            img_data = img_data[:, :, np.newaxis]
+        if img_data.ndim < 2:
+            raise ValueError(f"严重畸形数据，维度过低: {img_data.shape}")
+        # 👆 🚨 对齐结束 🚨 👆
+
+        # 空间重采样
+        target_x_spacing = 0.75
+        target_y_spacing = 0.75
+        target_z_spacing = 1.5
+        current = (z_spacing, xy_spacing, xy_spacing)
+        target = (target_z_spacing, target_x_spacing, target_y_spacing)
+
+        img_data = img_data.transpose(2, 0, 1)
+        tensor = torch.tensor(img_data.copy()).unsqueeze(0).unsqueeze(0)
+
+        img_data = resize_array(tensor, current, target)
+        img_data = img_data[0][0]
+        img_data = np.transpose(img_data, (1, 2, 0))
+
+        # 👇 🚨 严格对齐 4：归一化到 [-1, 1]，而不是之前的 [0, 1] 🚨 👇
+        hu_min, hu_max = -1000, 1000
+        img_data = np.clip(img_data, hu_min, hu_max)
+        img_data = (img_data / 1000.0).astype(np.float32)
+        # 👆 🚨 对齐结束 🚨 👆
+
+        tensor = torch.tensor(img_data)
+
+        # 👇 🚨 严格对齐 5：裁剪/填充的目标尺寸与 -1 填充值 🚨 👇
+        # ⚠️ 警告: 如果 480x480x240 导致您的显卡 OOM，请在这里按比例改回 (224, 224, 32) 等尺寸
+        target_shape = (224, 224, 32)
+        h, w, d = tensor.shape
+        dh, dw, dd = target_shape
+
+        h_start = max((h - dh) // 2, 0)
+        h_end = min(h_start + dh, h)ƒ
+        w_start = max((w - dw) // 2, 0)
+        w_end = min(w_start + dw, w)
+        d_start = max((d - dd) // 2, 0)
+        d_end = min(d_start + dd, d)
+
+        tensor = tensor[h_start:h_end, w_start:w_end, d_start:d_end]
+
+        pad_h_before = (dh - tensor.size(0)) // 2
+        pad_h_after = dh - tensor.size(0) - pad_h_before
+        pad_w_before = (dw - tensor.size(1)) // 2
+        pad_w_after = dw - tensor.size(1) - pad_w_before
+        pad_d_before = (dd - tensor.size(2)) // 2
+        pad_d_after = dd - tensor.size(2) - pad_d_before
+
+        # 注意：这里严格使用 value=-1 替代了原来的 0
+        tensor = torch.nn.functional.pad(
+            tensor,
+            (pad_d_before, pad_d_after, pad_w_before, pad_w_after, pad_h_before, pad_h_after),
+            value=-1
+        )
+        # 👆 🚨 对齐结束 🚨 👆
+
+        # 最终变为 [1, Depth, Height, Width]
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)
+        return tensor
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        # 👇 🚨 无尽容错结界：遇到脏数据自动顶替 🚨 👇
+        try:
+            sources = self.list_data_dict[i]
+            if isinstance(i, int):
+                sources = [sources]
+
+            if 'image' in sources[0]:
+                image_file = self.list_data_dict[i]['image']
+                image_folder = self.data_args.image_folder
+                full_path = os.path.join(image_folder, image_file)
+
+                # 提取图像特征
+                embedding = self.nii_img_to_tensor(full_path)
+
+                sources = preprocess_multimodal(
+                    copy.deepcopy([e["conversations"] for e in sources]),
+                    self.data_args)
+            else:
+                sources = copy.deepcopy([e["conversations"] for e in sources])
+
+            data_dict = preprocess(
+                sources,
+                self.tokenizer,
+                has_image=('image' in self.list_data_dict[i]))
+
+            if isinstance(i, int):
+                data_dict = dict(input_ids=data_dict["input_ids"][0],
+                                 labels=data_dict["labels"][0])
+
+            if 'image' in self.list_data_dict[i]:
+                data_dict['image'] = embedding
+
+            return data_dict
+
+        except Exception as e:
+            # 当遇到图像损坏、读取无权限、维度极度畸形时，捕获异常不中断训练
+            print(f"⚠️ 警告: 跳过损坏的样本 (索引 {i})，报错原因: {e}")
+            import random
+            # 替身使者机制：随机抽取一个有效数据顶替，确保分布式通信不崩溃
+            new_index = random.randint(0, len(self.list_data_dict) - 1)
+            return self.__getitem__(new_index)
+        # 👆 🚨 结界结束 🚨 👆
 
 @dataclass
 class DataCollatorForSupervisedDataset(object):

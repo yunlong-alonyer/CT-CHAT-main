@@ -11,10 +11,11 @@ from llava.model.multimodal_encoder.builder import build_vision_tower
 from llava.model.multimodal_projector.builder import build_vision_projector
 from llava.mm_utils import tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
-
+from llava.conversation import conv_templates
+import nibabel as nib
 
 # =========================================================================
-# 1. DICOM 序列读取与预处理函数
+# 1. DICOM 序列读取与预处理函数12
 # =========================================================================
 def load_dicom_series(dicom_dir):
     files = [os.path.join(dicom_dir, f) for f in os.listdir(dicom_dir) if os.path.isfile(os.path.join(dicom_dir, f))]
@@ -55,51 +56,96 @@ def load_dicom_series(dicom_dir):
     return image_data, slope, intercept, xy_spacing, z_spacing
 
 
+
+
+
 def resize_array(array, current_spacing, target_spacing):
+    """自适应重采样（带 max 保底防御）"""
     original_shape = array.shape[2:]
     scaling_factors = [current_spacing[i] / target_spacing[i] for i in range(len(original_shape))]
-    new_shape = [int(original_shape[i] * scaling_factors[i]) for i in range(len(original_shape))]
+    new_shape = [max(1, int(original_shape[i] * scaling_factors[i])) for i in range(len(original_shape))]
     return F.interpolate(array, size=new_shape, mode='trilinear', align_corners=False)
 
 
-def process_dicom_for_v2(dicom_dir):
+def process_nii_for_v2(nii_path):
     """
-    处理 DICOM 并对其进行重采样、裁剪、填充
+    处理 .nii.gz 文件，严格对齐预训练流水线
     """
-    img_data, slope, intercept, xy_spacing, z_spacing = load_dicom_series(dicom_dir)
+    # 1. 读取 NIfTI 文件及头信息
+    nii_img = nib.load(str(nii_path))
+    img_data = nii_img.get_fdata()
 
-    # 1. 重采样
+    # 获取体素间距 (通常 zooms 返回 [x, y, z])
+    zooms = nii_img.header.get_zooms()
+    xy_spacing = float(zooms[0])
+    z_spacing = float(zooms[2])
+
+    # 🚨 防御机制：强制降维到真正的 3D
+    while img_data.ndim > 3:
+        img_data = img_data[..., 0]
+    if img_data.ndim == 2:
+        img_data = img_data[:, :, np.newaxis]
+    if img_data.ndim < 2:
+        raise ValueError(f"严重畸形数据，维度过低: {img_data.shape}")
+
+    # 默认你的 .nii.gz 已经保存为了 HU 值，或者不需特殊换算
+    # 这与 train.py 中查不到 CSV 时的 fallback 逻辑完全一致
+    slope, intercept = 1.0, 0.0
+    img_data = slope * img_data + intercept
+
+    # 转为 [Depth, Height, Width] 准备重采样 (完全对齐 train.py)
+    img_data = img_data.transpose(2, 0, 1)
+
+    # 2. 空间重采样
     target_x_spacing, target_y_spacing, target_z_spacing = 0.75, 0.75, 1.5
     current = (z_spacing, xy_spacing, xy_spacing)
     target = (target_z_spacing, target_x_spacing, target_y_spacing)
 
-    img_data = slope * img_data + intercept
-    img_data = np.clip(img_data, -1000, 1000)
-    img_data = img_data.transpose(2, 0, 1)
-
-    tensor = torch.tensor(img_data).float().unsqueeze(0).unsqueeze(0)
+    tensor = torch.tensor(img_data.copy()).float().unsqueeze(0).unsqueeze(0)
     tensor = resize_array(tensor, current, target)
-    img_data = tensor.squeeze().numpy()
+    img_data = tensor[0][0].numpy()
+
+    # 转回 [Height, Width, Depth]
     img_data = np.transpose(img_data, (1, 2, 0))
 
-    # 2. 归一化
-    img_data = (img_data / 1000).astype(np.float32)
+    # 3. 截断与归一化到 [-1, 1]
+    hu_min, hu_max = -1000, 1000
+    img_data = np.clip(img_data, hu_min, hu_max)
+    img_data = (img_data / 1000.0).astype(np.float32)
+
     tensor = torch.tensor(img_data)
 
-    # 3. 【核心对齐】: 必须是 224 以匹配视觉塔
-    target_shape = (224, 224, 32)
+    # 4. 尺寸对齐与居中裁剪
+    target_shape = (224, 224, 32)  # 严格匹配大模型显存安全的 16 层 。
     h, w, d = tensor.shape
     dh, dw, dd = target_shape
 
-    h_start, w_start, d_start = max((h - dh) // 2, 0), max((w - dw) // 2, 0), max((d - dd) // 2, 0)
-    tensor = tensor[h_start:h_start + dh, w_start:w_start + dw, d_start:d_start + dd]
+    h_start = max((h - dh) // 2, 0)
+    h_end = min(h_start + dh, h)
+    w_start = max((w - dw) // 2, 0)
+    w_end = min(w_start + dw, w)
+    d_start = max((d - dd) // 2, 0)
+    d_end = min(d_start + dd, d)
 
-    pad_h = max(dh - tensor.size(0), 0)
-    pad_w = max(dw - tensor.size(1), 0)
-    pad_d = max(dd - tensor.size(2), 0)
-    tensor = F.pad(tensor, (0, pad_d, 0, pad_w, 0, pad_h), value=-1)
+    tensor = tensor[h_start:h_end, w_start:w_end, d_start:d_end]
 
-    # 4. 最终形状 [1, 1, 32, 224, 224]
+    # 5. 居中填充 (填充值为无意义空气 -1)
+    pad_h_before = (dh - tensor.size(0)) // 2
+    pad_h_after = dh - tensor.size(0) - pad_h_before
+
+    pad_w_before = (dw - tensor.size(1)) // 2
+    pad_w_after = dw - tensor.size(1) - pad_w_before
+
+    pad_d_before = (dd - tensor.size(2)) // 2
+    pad_d_after = dd - tensor.size(2) - pad_d_before
+
+    tensor = torch.nn.functional.pad(
+        tensor,
+        (pad_d_before, pad_d_after, pad_w_before, pad_w_after, pad_h_before, pad_h_after),
+        value=-1
+    )
+
+    # 6. 转为 [1, 1, Depth, Height, Width] -> [1, 1, 16, 224, 224]
     tensor = tensor.permute(2, 0, 1)
     return tensor.unsqueeze(0).unsqueeze(0).cuda().bfloat16()
 
@@ -109,8 +155,8 @@ def process_dicom_for_v2(dicom_dir):
 # =========================================================================
 
 QWEN_DIR = "../../model/Qwen3.5-9B"
-CT_CLIP_PATH = "checkpoint/CT-CLIP_v2.pt"
-DICOM_DIR = "/mnt/share_data/CT/ct_dataset_base_260316/lz2nodesk_ct_chest_1000/10050302800015"
+CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
+NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/100002300082/000972_1305455278_2_L_SpineRoutine.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(QWEN_DIR, trust_remote_code=True)
@@ -137,7 +183,8 @@ print("[*] 挂载视觉塔与适配器...")
 model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
-PROJECTOR_WEIGHTS_PATH = "./checkpoints/qwen-ct-pretrain/mm_projector.bin"
+PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector/epoch_1/mm_projector.bin"
+#PROJECTOR_WEIGHTS_PATH =  ""
 # ==========================================
 # 修改 test_real_data.py 中加载适配器权重的部分
 # ==========================================
@@ -178,29 +225,63 @@ model.eval()
 
 # 准备文本输入
 #prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：前面的是一段经过3d编码器的CT图像。请简单告诉我你看到了什么。"
-prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告。"
+#prompt = f" {DEFAULT_IMAGE_TOKEN}\n 这是一个患者的CT影像，生成一份详细的医疗报告。"
+
+# 这行代码会去字典里拿到你上面配好的 conv_qwen 模板
+conv = conv_templates["qwen"].copy()
+
+# 填入用户的问题（带上图片占位符）
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告只包含‘影像所见’和‘影像所得’。"
+conv.append_message(conv.roles[0], raw_text)
+conv.append_message(conv.roles[1], None)
+
+# 生成最终的 Prompt 字符串
+prompt = conv.get_prompt()
+
 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
 
 # 准备影像
-print(f"[*] 正在预处理 DICOM 序列...")
-images = process_dicom_for_v2(DICOM_DIR)
+print(f"[*] 正在预处理 NIfTI 影像...")
+images = process_nii_for_v2(NII_PATH)
 print(f"[*] 预处理完成，张量形状: {images.shape}，精度: {images.dtype}")
-
+attention_mask = torch.ones_like(input_ids).cuda()
 # 执行推理
 print("\n>>> 开始生成文本...")
+# 确保获取到了停止符
+stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
+
 with torch.no_grad():
-    # 显式关闭 autocast 以配合视觉塔的隔离岛策略
     with torch.amp.autocast('cuda', enabled=False):
         output_ids = model.generate(
-            input_ids, images=images, do_sample=True, temperature=0.7, max_new_tokens=256, use_cache=True
+            input_ids,
+            attention_mask=attention_mask,
+            images=images,
+            do_sample=True,
+            temperature=0.2,
+            top_p=0.8,
+            no_repeat_ngram_size=4,
+            pad_token_id=stop_token_id,
+            eos_token_id=stop_token_id,   # 🚨 最关键的一行：一旦模型想输出 <|im_end|>，强制让它停下，不许继续联想！
+            max_new_tokens=2048,
+            use_cache=True
         )
+
+
 
 # 解码
 input_token_len = input_ids.shape[1]
 new_tokens = output_ids[0][input_token_len:].tolist()
 response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
 
+# 🌟 新增：自动过滤 think 过程
+if "</think>" in response:
+    # 按照 </think> 切分，只取后面的正式报告部分
+    final_report = response.split("</think>")[-1].strip()
+else:
+    # 如果模型偶尔没按格式输出，就保留原样
+    final_report = response
+
 print("\n" + "=" * 50)
-print("[Qwen3.5 推理输出]:")
-print(response)
+print("[Qwen3.5 最终报告输出]:")
+print(final_report)
 print("=" * 50)

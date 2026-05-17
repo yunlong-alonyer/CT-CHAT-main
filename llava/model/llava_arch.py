@@ -260,20 +260,10 @@ class LlavaMetaForCausalLM(ABC):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
                 if i < num_images:
-                    # ==========================================
-                    # 核心防越界保护：如果文本里的 <image> 数量多于实际图像
-                    # ==========================================
-                    if cur_image_idx < len(image_features):
-                        cur_image_features = image_features[cur_image_idx]
-                        cur_image_idx += 1
-                    else:
-                        # 兜底：直接复用最后一个图像特征，防止报错中断训练
-                        cur_image_features = image_features[-1]
-                    # ==========================================
-
+                    cur_image_features = image_features[cur_image_idx]
+                    cur_image_idx += 1
                     cur_new_input_embeds.append(cur_image_features)
-
-                    # 图像特征区域的 Label 设为 IGNORE_INDEX，不计算交叉熵 Loss
+                    # 图像特征区域的 Label 设为 IGNORE_INDEX，不计算交叉熵 Loss111
                     cur_new_labels.append(
                         torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device,
                                    dtype=cur_labels.dtype))

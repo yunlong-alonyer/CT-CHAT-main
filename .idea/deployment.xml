@@ -5,7 +5,14 @@
       <paths name="nodesk">
         <serverdata>
           <mappings>
-            <mapping deploy="/code/CT-CHAT-main" local="$PROJECT_DIR$" />
+            <mapping deploy="/home/huali/code/CT-CHAT-main" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="nodesk2">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/huali/code/CT-CHAT-main" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

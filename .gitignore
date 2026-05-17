@@ -13,7 +13,7 @@ checkpoints/
 *.pt
 *.pth
 *.ckpt
-
+*.json
 # Jupyter / logs
 .ipynb_checkpoints/
 *.log
