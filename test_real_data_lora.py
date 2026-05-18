@@ -183,45 +183,58 @@ print("[*] 挂载视觉塔与适配器...")
 model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
-PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector/epoch_1/mm_projector.bin"
-#PROJECTOR_WEIGHTS_PATH =  ""
-# ==========================================
-# 修改 test_real_data.py 中加载适配器权重的部分
-# ==========================================
+from peft import PeftModel
 
-if os.path.exists(PROJECTOR_WEIGHTS_PATH):
-    print(f"[*] 正在加载预训练适配器权重: {PROJECTOR_WEIGHTS_PATH}")
+# 定义微调后的 LoRA 路径
+LORA_DIR = "/home/huali/workspace/wzl/CTModel/output/qwen-ct-finetune-lora"
+print(f"[*] 准备挂载微调后的模型权重: {LORA_DIR}")
 
-    # 1. 加载原始权重
-    checkpoint = torch.load(PROJECTOR_WEIGHTS_PATH, map_location="cpu")
+# ---------------------------------------------------------
+# 1. 加载微调阶段同步更新的 Projector 权重
+# LLaVA 的 LoRA 训练默认将 Projector 保存在 non_lora_trainables.bin 中
+# ---------------------------------------------------------
+projector_weight_path = os.path.join(LORA_DIR, "non_lora_trainables.bin")
+if not os.path.exists(projector_weight_path):
+    projector_weight_path = os.path.join(LORA_DIR, "mm_projector.bin")
 
-    # 2. 精准清洗 Key 名
-    # 根据报错信息，前缀是 "mm_projector."
+if os.path.exists(projector_weight_path):
+    print(f"[*] 正在加载微调版 Projector 权重: {projector_weight_path}")
+    checkpoint = torch.load(projector_weight_path, map_location="cpu")
     state_dict = {}
+
+    # 清洗 Key 名（清洗掉 base_model.model.model.mm_projector. 等前缀）
     for k, v in checkpoint.items():
-        # 如果 Key 开头是 mm_projector.，则去掉它
-        if k.startswith("mm_projector."):
-            new_key = k.replace("mm_projector.", "")
+        if "mm_projector" in k:
+            new_key = k.split("mm_projector.")[-1]
             state_dict[new_key] = v
-        else:
-            state_dict[k] = v
 
-    # 3. 加载到模型中
-    msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
-    print(f"[*] 适配器权重加载结果: {msg}")
-    print("[*] 适配器权重加载成功！")
+    if len(state_dict) > 0:
+        msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
+        print(f"[*] 微调版 Projector 权重加载结果: {msg}")
 else:
-    print(f"[!] 警告：未找到权重文件 {PROJECTOR_WEIGHTS_PATH}")
+    print(f"[!] 警告：未在 LoRA 目录下找到 Projector 权重，将使用随机初始化的 Projector！")
 
-# --- 核心修复：强制对齐精度与设备 ---
-# 1. 适配器（Projector）必须跟随 LLM 使用 bfloat16
+# ---------------------------------------------------------
+# 2. 挂载 Qwen 大脑的 LoRA 权重 (关键！)
+# ---------------------------------------------------------
+print(f"[*] 正在合并 LoRA 权重到 Qwen 底座...")
+model = PeftModel.from_pretrained(
+    model,
+    LORA_DIR,
+    torch_dtype=torch.bfloat16
+)
+# 【可选优化】：为了让推理速度更快，可以把 LoRA 权重直接融合到底座模型中
+# model = model.merge_and_unload()
+
+# ---------------------------------------------------------
+# 3. 强制对齐精度与设备
+# ---------------------------------------------------------
 model.get_model().mm_projector.to(dtype=torch.bfloat16, device="cuda")
-
-# 2. 视觉塔使用隔离岛策略，强制保持在 float32
 model.get_model().vision_tower.to(dtype=torch.float32, device="cuda")
 
 model.cuda()
 model.eval()
+print("[*] 模型微调权重挂载完毕，可以开始推理！")
 
 # 准备文本输入
 #prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：前面的是一段经过3d编码器的CT图像。请简单告诉我你看到了什么。"
