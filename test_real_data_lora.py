@@ -156,7 +156,7 @@ def process_nii_for_v2(nii_path):
 
 QWEN_DIR = "../../model/Qwen3.5-9B"
 CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
-NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/1001505740042/CT3036_1911940696_206.nii.gz"
+NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10024605940004/CT-105568_845461216_Head_Trauma_1-11-5_120mm.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(QWEN_DIR, trust_remote_code=True)
