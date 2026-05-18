@@ -233,7 +233,8 @@ conv = conv_templates["qwen"].copy()
 
 # 填入用户的问题（带上图片占位符）
 #raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告只包含‘影像所见’和‘影像所得’。"
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：作为专业的放射科医生，请解读这份3D CT影像，提供影像所见及结论"
+#raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：作为专业的放射科医生，请解读这份3D CT影像，提供影像所见及结论"
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，该扫描部位属于：A.胸部 B.头部 C.腹部。请直接输出字母选项："
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
