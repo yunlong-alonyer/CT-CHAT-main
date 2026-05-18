@@ -155,7 +155,8 @@ def process_nii_for_v2(nii_path):
 # =========================================================================
 
 QWEN_DIR = "../../model/Qwen3.5-9B"
-CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
+#CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
+CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
 NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/100517/_3678359135_01_Thorax.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
