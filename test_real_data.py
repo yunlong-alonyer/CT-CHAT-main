@@ -183,7 +183,7 @@ print("[*] 挂载视觉塔与适配器...")
 model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
-PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector/epoch_1/mm_projector.bin"
+PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector/epoch_2/mm_projector.bin"
 #PROJECTOR_WEIGHTS_PATH =  ""
 # ==========================================
 # 修改 test_real_data.py 中加载适配器权重的部分
