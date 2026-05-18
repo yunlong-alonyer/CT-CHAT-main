@@ -1,7 +1,7 @@
 import json
 
 # 填入你清理好的 json 文件路径
-json_path = "dataset_llava_format_clean.json"
+json_path = "dataset_llava_format_10000.json"
 # 填入你刚才测试的 CT 图像文件名
 target_image = "1000705940001/CT175340_2506621215_5.1_Routine_Chest_0.8_sec.7.5mm.nii.gz"
 
