@@ -999,7 +999,7 @@ class LazySupervisedDataset(Dataset):
         dh, dw, dd = target_shape
 
         h_start = max((h - dh) // 2, 0)
-        h_end = min(h_start + dh, h)ƒ
+        h_end = min(h_start + dh, h)
         w_start = max((w - dw) // 2, 0)
         w_end = min(w_start + dw, w)
         d_start = max((d - dd) // 2, 0)
