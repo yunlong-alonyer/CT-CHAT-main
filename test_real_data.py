@@ -274,7 +274,7 @@ with torch.no_grad():
             input_ids,
             attention_mask=attention_mask,
             images=images,
-            do_sample=True,
+            do_sample=False,
             temperature=0.2,
             top_p=0.8,
             no_repeat_ngram_size=4,
