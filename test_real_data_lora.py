@@ -291,9 +291,9 @@ with torch.no_grad():
             no_repeat_ngram_size=4,
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,   # 🚨 最关键的一行：一旦模型想输出 <|im_end|>，强制让它停下，不许继续联想！
-            max_new_tokens=1024,
+            max_new_tokens=2048,
             use_cache=True,
-            repetition_penalty=1.2,
+
 
         )
 
