@@ -157,7 +157,7 @@ def process_nii_for_v2(nii_path):
 QWEN_DIR = "../../model/Qwen3.5-9B"
 #CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
 CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
-NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/100517/_3678359135_01_Thorax.nii.gz"
+NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10053105940002/CT163369_1090606624_02_HeadRoutine_Seq.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(QWEN_DIR, trust_remote_code=True)
@@ -233,8 +233,8 @@ conv = conv_templates["qwen"].copy()
 
 # 填入用户的问题（带上图片占位符）
 #raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告只包含‘影像所见’和‘影像所得’。"
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，作为专业的放射科医生，请解读这份CT影像，提供影像所见及结论"
-#raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，该扫描部位属于：A.胸部 B.头部 C.腹部。请直接输出字母选项："
+#raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，作为专业的放射科医生，请解读这份CT影像，提供影像所见及结论"
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，该扫描部位属于：A.胸部 B.头部 C.腹部。请直接输出字母选项："
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
