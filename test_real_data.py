@@ -155,8 +155,8 @@ def process_nii_for_v2(nii_path):
 # =========================================================================
 
 QWEN_DIR = "../../model/Qwen3.5-9B"
-#CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
-CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
+CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
+#CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
 NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10053105940002/CT163369_1090606624_02_HeadRoutine_Seq.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
@@ -267,47 +267,39 @@ if not has_image_token:
 else:
     print(f"[Debug] 占位符注入成功！包含 -200 的数量: {(input_ids == IMAGE_TOKEN_INDEX).sum().item()}")
 
-# ==========================================================
-# 终极零样本测试：直接读取 Logits 概率，完全禁止模型“开口说话”
-# ==========================================================
-print("\n>>> 开始进行 Logits 概率探测 (零样本单选题测试)...")
-
-# 1. 提取 A、B、C 在 Qwen 词表中的 Token ID
-# 注意：大模型的词表中，带空格的 " A" 和不带空格的 "A" 可能是不同的 Token，
-# 这里我们获取最纯粹的字母 Token ID
-token_id_A = tokenizer.encode("A", add_special_tokens=False)[0]
-token_id_B = tokenizer.encode("B", add_special_tokens=False)[0]
-token_id_C = tokenizer.encode("C", add_special_tokens=False)[0]
 
 with torch.no_grad():
-    with torch.amp.autocast('cuda', enabled=False):  # 根据你的代码保持一致
-        # 2. 我们不调用 generate，而是直接调用 forward (即 model(xxx))
-        # 这只会计算一次前向传播，得到下一个词的概率分布，不会产生连续生成
-        outputs = model(
-            input_ids=input_ids,
+    with torch.amp.autocast('cuda', enabled=False):
+        output_ids = model.generate(
+            input_ids,
             attention_mask=attention_mask,
-            images=images
+            images=images,
+            do_sample=True,
+            temperature=0.2,
+            top_p=0.8,
+            no_repeat_ngram_size=4,
+            pad_token_id=stop_token_id,
+            eos_token_id=stop_token_id,   # 🚨 最关键的一行：一旦模型想输出 <|im_end|>，强制让它停下，不许继续联想！
+            max_new_tokens=2048,
+            use_cache=True
         )
 
-        # 3. 获取序列最后一个 Token 预测下一个词的全部得分 (Logits)
-        # 形状为 [vocab_size]
-        next_token_logits = outputs.logits[0, -1, :]
 
-        # 4. 精准提取 A, B, C 的得分
-        score_A = next_token_logits[token_id_A].item()
-        score_B = next_token_logits[token_id_B].item()
-        score_C = next_token_logits[token_id_C].item()
+
+# 解码
+input_token_len = input_ids.shape[1]
+new_tokens = output_ids[0][input_token_len:].tolist()
+response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
+
+# 🌟 新增：自动过滤 think 过程
+if "</think>" in response:
+    # 按照 </think> 切分，只取后面的正式报告部分
+    final_report = response.split("</think>")[-1].strip()
+else:
+    # 如果模型偶尔没按格式输出，就保留原样
+    final_report = response
 
 print("\n" + "=" * 50)
-print("[Qwen3.5 脑电波 Logits 分析]:")
-print(f"选项 A (胸部) 的原始得分: {score_A:.4f}")
-print(f"选项 B (头部) 的原始得分: {score_B:.4f}")
-print(f"选项 C (腹部) 的原始得分: {score_C:.4f}")
-
-# 5. 用代码强行判定最高分
-scores = {"A (胸部)": score_A, "B (头部)": score_B, "C (腹部)": score_C}
-best_option = max(scores, key=scores.get)
-
-print("-" * 50)
-print(f"🎯 模型最终判定结果: {best_option}")
+print("[Qwen3.5 最终报告输出]:")
+print(final_report)
 print("=" * 50)
