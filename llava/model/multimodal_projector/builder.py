@@ -58,7 +58,7 @@ def build_vision_projector(config, delay_load=False, **kwargs):
     # 核心修改 2：新增 3D CT 影像 Attention-Pooling 分支 (保持架构解耦)
     # =====================================================================
     if projector_type in ['ct_qwen_pooler', 'coca_pooler']:
-        # 构建两层 MLP，负责将 CT 编码器的维度升/降维到 Qwen 的 5120 维
+        # 构建两层 MLP，负责将 CT 编码器的维度升/降维到 Qwen 的 4096 维
         mlp_projector = nn.Sequential(
             nn.Linear(config.mm_hidden_size, target_hidden_size),
             nn.GELU(),

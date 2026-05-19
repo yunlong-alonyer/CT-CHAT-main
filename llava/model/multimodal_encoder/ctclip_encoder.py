@@ -50,7 +50,7 @@ class CTCLIPVisionTower(nn.Module):
                                  'visual' in k or 'transformer' in k}
 
             try:
-                self.vision_tower.load_state_dict(vision_state_dict, strict=False)
+                self.vision_tower.load_state_dict(vision_state_dict, strict=True)
                 print("[*] CT-CLIP 权重加载成功！")
             except Exception as e:
                 print(f"[!] 权重加载过程中出现部分不匹配 (通常是投射层): {e}")

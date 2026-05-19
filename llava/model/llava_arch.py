@@ -155,9 +155,9 @@ class LlavaMetaForCausalLM(ABC):
             images, image_sizes=None
     ):
         # ==========================================================
-        # 修改 1：动态获取 Qwen3 的 image_token_id (默认为 151655)
+        # 修改 1：动态获取 Qwen3.5 的 image_token_id (默认为 151655)
         # ==========================================================
-        qwen_image_token_id = getattr(self.config, 'image_token_id', 151655)
+        qwen_image_token_id = getattr(self.config, 'image_token_id', 248056)
 
         if images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
