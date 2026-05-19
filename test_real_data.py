@@ -116,7 +116,7 @@ def process_nii_for_v2(nii_path):
     tensor = torch.tensor(img_data)
 
     # 4. 尺寸对齐与居中裁剪
-    target_shape = (240, 240, 30)  # 严格匹配大模型显存安全的 16 层 。
+    target_shape = (224, 224, 32)  # 严格匹配大模型显存安全的 16 层 。
     h, w, d = tensor.shape
     dh, dw, dd = target_shape
 
@@ -155,8 +155,8 @@ def process_nii_for_v2(nii_path):
 # =========================================================================
 
 QWEN_DIR = "../../model/Qwen3.5-9B"
-#CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
-CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
+CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
+#CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
 NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10053105940002/CT163369_1090606624_02_HeadRoutine_Seq.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
@@ -168,7 +168,7 @@ multimodal_cfg = {
     "mm_vision_tower": "ctclip",
     "vision_tower_path": CT_CLIP_PATH,
     "mm_projector_type": "coca_pooler",
-    "mm_hidden_size": 512,
+    "mm_hidden_size": 768,
     "hidden_size": 4096,
     "image_token_id": 248056,
 }
@@ -208,7 +208,7 @@ if os.path.exists(PROJECTOR_WEIGHTS_PATH):
             state_dict[k] = v
 
     # 3. 加载到模型中
-    msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=False)
+    msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
     print(f"[*] 适配器权重加载结果: {msg}")
     print("[*] 适配器权重加载成功！")
 else:
