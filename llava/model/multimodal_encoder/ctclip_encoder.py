@@ -45,15 +45,38 @@ class CTCLIPVisionTower(nn.Module):
             ckpt = torch.load(self.vision_tower_path, map_location="cpu")
 
             # 清洗权重字典的前缀
-            state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
+            #state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
             vision_state_dict = {k.replace('visual.', ''): v for k, v in state_dict.items() if
                                  'visual' in k or 'transformer' in k}
 
+            #try:
+            #    self.vision_tower.load_state_dict(vision_state_dict, strict=True)
+            #    print("[*] CT-CLIP 权重加载成功！")
+            #except Exception as e:
+            #    print(f"[!] 权重加载过程中出现部分不匹配 (通常是投射层): {e}")
+
+            # ctclip_encoder.py - load_model() 中的权重清洗逻辑替换为：
+
+            state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
+
+            # CT-CLIP v2 的视觉塔权重前缀是 "visual_transformer."
+            vision_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith('visual_transformer.'):
+                    new_key = k.replace('visual_transformer.', '')
+                    vision_state_dict[new_key] = v
+
+            print(f"[*] 从 checkpoint 中提取到 {len(vision_state_dict)} 个视觉塔权重")
+
             try:
-                self.vision_tower.load_state_dict(vision_state_dict, strict=True)
-                print("[*] CT-CLIP 权重加载成功！")
+                msg = self.vision_tower.load_state_dict(vision_state_dict, strict=False)
+                print(f"[*] CT-CLIP 权重加载完成")
+                print(f"    Missing keys: {len(msg.missing_keys)}")
+                print(f"    Unexpected keys: {len(msg.unexpected_keys)}")
+                if msg.missing_keys:
+                    print(f"    [!] 缺失 keys (前5条): {msg.missing_keys[:5]}")
             except Exception as e:
-                print(f"[!] 权重加载过程中出现部分不匹配 (通常是投射层): {e}")
+                print(f"[!] 权重加载失败: {e}")
 
             # --- 核心修复 1：强制隔离为 Float32 ---
             # 视觉塔内部含有 VQ 库，必须强制在 FP32 下运行以避免底层算子精度冲突
