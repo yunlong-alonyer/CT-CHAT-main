@@ -22,12 +22,13 @@ class CTCLIPVisionTower(nn.Module):
             dim=512,
             codebook_size=8192,
             image_size=224,
-            patch_size=16,
-            temporal_patch_size=2,
-            spatial_depth=4,
+            patch_size=20,
+            temporal_patch_size=10,
+            spatial_depth=12,
             temporal_depth=4,
             heads=8,
-            channels=1
+            channels=1,
+            dim_head=32,
         )
 
         # CT-CLIP v2 的特征维度是 768
