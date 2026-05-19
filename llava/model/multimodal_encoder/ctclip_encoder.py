@@ -24,9 +24,9 @@ class CTCLIPVisionTower(nn.Module):
             image_size=224,
             patch_size=16,
             temporal_patch_size=2,
-            spatial_depth=12,
+            spatial_depth=4,
             temporal_depth=4,
-            heads=12,
+            heads=8,
             channels=1
         )
 
