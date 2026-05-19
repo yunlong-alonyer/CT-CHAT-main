@@ -19,7 +19,7 @@ class CTCLIPVisionTower(nn.Module):
         # 2. 初始化 CT-CLIP v2 核心架构
         # 注意：image_size 必须固定为 224 以匹配权重
         self.vision_tower = CTViT(
-            dim=768,
+            dim=512,
             codebook_size=8192,
             image_size=224,
             patch_size=16,
@@ -31,7 +31,7 @@ class CTCLIPVisionTower(nn.Module):
         )
 
         # CT-CLIP v2 的特征维度是 768
-        self.hidden_size = 768
+        self.hidden_size = 512
 
         if self.vision_tower_path:
             self.load_model()
