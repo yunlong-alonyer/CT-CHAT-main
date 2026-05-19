@@ -46,8 +46,8 @@ class CTCLIPVisionTower(nn.Module):
 
             # 清洗权重字典的前缀
             #state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
-            vision_state_dict = {k.replace('visual.', ''): v for k, v in state_dict.items() if
-                                 'visual' in k or 'transformer' in k}
+            #vision_state_dict = {k.replace('visual.', ''): v for k, v in state_dict.items() if
+            #                     'visual' in k or 'transformer' in k}
 
             #try:
             #    self.vision_tower.load_state_dict(vision_state_dict, strict=True)
