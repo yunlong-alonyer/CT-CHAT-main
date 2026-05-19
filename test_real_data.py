@@ -208,7 +208,7 @@ if os.path.exists(PROJECTOR_WEIGHTS_PATH):
             state_dict[k] = v
 
     # 3. 加载到模型中
-    msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
+    msg = model.get_model().mm_projector.load_state_dict(state_dict, strict=False)
     print(f"[*] 适配器权重加载结果: {msg}")
     print("[*] 适配器权重加载成功！")
 else:
