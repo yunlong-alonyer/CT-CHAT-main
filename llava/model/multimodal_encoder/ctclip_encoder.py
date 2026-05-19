@@ -21,14 +21,14 @@ class CTCLIPVisionTower(nn.Module):
         self.vision_tower = CTViT(
             dim=512,
             codebook_size=8192,
-            image_size=224,
+            image_size=240,  # 240 / 20 = 12，能整除
             patch_size=20,
             temporal_patch_size=10,
-            spatial_depth=12,
+            spatial_depth=4,
             temporal_depth=4,
             heads=8,
-            channels=1,
             dim_head=32,
+            channels=1
         )
 
         # CT-CLIP v2 的特征维度是 768

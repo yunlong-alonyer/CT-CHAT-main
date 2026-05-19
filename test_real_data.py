@@ -116,7 +116,7 @@ def process_nii_for_v2(nii_path):
     tensor = torch.tensor(img_data)
 
     # 4. 尺寸对齐与居中裁剪
-    target_shape = (224, 224, 32)  # 严格匹配大模型显存安全的 16 层 。
+    target_shape = (240, 240, 32)  # 严格匹配大模型显存安全的 16 层 。
     h, w, d = tensor.shape
     dh, dw, dd = target_shape
 
