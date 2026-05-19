@@ -26,7 +26,7 @@ for k in msg.unexpected_keys:
 # 跑一个前向验证编码器能正常工作
 print("\n=== 前向传播验证 ===")
 model.eval()
-dummy = torch.zeros(1, 1, 32, 240, 240)  # [B, C, D, H, W]
+dummy = torch.zeros(1, 1, 30, 240, 240)  # [B, C, D, H, W]
 with torch.no_grad():
     out = model(dummy, return_encoded_tokens=True)
 print(f"输入: {dummy.shape}")
