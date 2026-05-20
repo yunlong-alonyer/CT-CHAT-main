@@ -3,7 +3,7 @@ import torch.nn as nn
 import os
 # 注意：确保你的环境里能正确
 
-from transformer_maskgit.ctvit import CTViT
+from transformer_maskgit import CTViT
 
 
 class CTCLIPVisionTower(nn.Module):
