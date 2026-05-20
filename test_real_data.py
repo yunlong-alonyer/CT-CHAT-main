@@ -285,79 +285,65 @@ bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 # -------------------------------------------------------------------
 # [Debug & 修复] 提前手动进行多模态特征融合
 # -------------------------------------------------------------------
-print("\n[Debug] --- 开始验证多模态数据流并拼装特征 ---")
-try:
-    # 1. 强制对齐 Vision Tower 的精度 (float32)，防止内部运算出现 NaN
-    images_f32 = images.to(device="cuda", dtype=torch.float32)
+# =========================================================================
+# [核心修复] 动态补丁：在视觉塔和适配器之间架设精度转换桥梁
+# =========================================================================
+import types
 
-    # 2. 手动调用 LLaVA 的融合函数 (注意这里正确接收 6 个返回值)
-    (
-        _input_ids,
-        _position_ids,
-        _attention_mask,  # 🚨 这是包含了图像 256 长度后，真正正确的 Mask
-        _past_key_values,
-        inputs_embeds,  # 🚨 这是真正包含图像向量的 Embeddings
-        _labels
-    ) = model.prepare_inputs_labels_for_multimodal(
-        input_ids=input_ids,
-        position_ids=None,
-        attention_mask=attention_mask,
-        past_key_values=None,
-        labels=None,
-        images=images_f32
-    )
 
-    print(f"[Debug] 拼装前文本 Token 长度: {input_ids.shape[1]}")
-    print(f"[Debug] 拼装后融合特征长度: {inputs_embeds.shape[1]}")
+def patched_encode_images(self, images):
+    # 强制转换为 float32 给 Vision Tower，防止卷积层出现 NaN
+    images_f32 = images.to(dtype=torch.float32)
+    image_features = self.get_model().get_vision_tower()(images_f32)
 
-    if inputs_embeds.shape[1] > input_ids.shape[1]:
-        print("[Debug] ✅ 物理通路正常：图像 Token 已成功扩展为视觉特征向量！")
-    else:
-        print("[Error] ❌ 物理通路断裂：替换失败！")
+    # 强制转换为 bfloat16 给 Projector，迎合 LLM 精度，防止 einsum 崩溃
+    image_features = image_features.to(dtype=torch.bfloat16)
+    image_features = self.get_model().mm_projector(image_features)
 
-except Exception as e:
-    print(f"[Error] 🚨 特征融合执行失败: {e}")
-    import traceback
+    return image_features
 
-    traceback.print_exc()
 
-# ==========================================
-# 2. 核心修改：生成参数 (Greedy Decoding)
-# ==========================================
-# ==========================================
-# 2. 核心修改：生成参数 (Greedy Decoding)
-# ==========================================
-print("\n>>> 开始生成文本...")
+# 将打好补丁的方法强制绑定给当前模型
+model.encode_images = types.MethodType(patched_encode_images, model)
+# =========================================================================
 
-# 🚨 补充缺失的变量定义
+# 1. 调整对话模板与 Prompt（降级为基础描述任务，测试视力）
+conv = conv_templates["qwen"].copy()
+conv.system = "你是一个专业的医疗AI助手CT-CHAT。请仔细观察提供的CT影像并作答。"
+# 🚨 关键：放弃选择题，用最泛化的描述指令，避免触发模型的“做题抗拒”
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n这是一张CT影像，请简要告诉我你在影像中看到了什么器官或组织？"
+conv.append_message(conv.roles[0], raw_text)
+conv.append_message(conv.roles[1], None)
+
+prompt = conv.get_prompt()
+input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
+
+attention_mask = torch.ones_like(input_ids).cuda()
 stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
-bad_words = ["<think>", "</think>", "Thinking Process:", "思考过程", "我理解", "好的"]
-bad_words_ids = [tokenizer.encode(word, add_special_tokens=False) for word in bad_words]
-bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 
+print("\n>>> 开始原生多模态生成 (测试视觉感知)...")
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
-        # 🚨 关键修复：直接传入 inputs_embeds 和对应的 _attention_mask
+        # 🚨 回归最干净的原生 generate 调用
+        # 因为上面的 patched_encode_images 已经解决了精度崩溃，现在原生 generate 可以畅通无阻了
         output_ids = model.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=_attention_mask,
-            do_sample=False,
-            no_repeat_ngram_size=4,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            images=images,  # 交给底层 forward 自己去融合
+            do_sample=True,  # 开启一定发散度
+            temperature=0.4,
+            top_p=0.9,
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
-            bad_words_ids=bad_words_ids,
-            max_new_tokens=256,  # 只生成极短的字符（字母）
+            max_new_tokens=256,  # 允许模型详细描述
             use_cache=True
         )
 
-# ==========================================
-# 3. 解码与后处理清洗
-# ==========================================
-# 由于传入的是 inputs_embeds，模型生成的 output_ids 默认只包含回答，无需切片
-new_tokens = output_ids[0].tolist()
+# 解码与后处理
+input_token_len = input_ids.shape[1]
+new_tokens = output_ids[0][input_token_len:].tolist()
 response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
 
-# 模板残留清理
 if response.startswith("assistant"):
     response = response[len("assistant"):].strip()
 
