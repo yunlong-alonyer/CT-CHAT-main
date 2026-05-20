@@ -68,26 +68,46 @@ CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
 PROJECTOR_WEIGHTS_PATH = "./checkpoints/test2/checkpoint-26/mm_projector.bin"
 NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10053105940002/CT163369_1090606624_02_HeadRoutine_Seq.nii.gz"
 
+print(f"\n[Info] 正在初始化 Tokenizer 和模型配置...")
 tokenizer = AutoTokenizer.from_pretrained(QWEN_DIR, trust_remote_code=True)
 raw_config = AutoConfig.from_pretrained(QWEN_DIR, trust_remote_code=True)
 multimodal_cfg = {"mm_vision_tower": "ctclip", "vision_tower_path": CT_CLIP_PATH, "mm_projector_type": "coca_pooler",
                   "mm_hidden_size": 512, "hidden_size": 4096, "image_token_id": 248056}
 for k, v in multimodal_cfg.items(): setattr(raw_config, k, v)
 
+print(f"[Info] 正在加载 Qwen 基座模型与 CT-CLIP 视觉编码器...")
 model = LlavaQwenForCausalLM.from_pretrained(QWEN_DIR, config=raw_config, torch_dtype=torch.bfloat16,
                                              low_cpu_mem_usage=True)
 model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
 # 加载权重
+print(f"[Info] 正在从 {PROJECTOR_WEIGHTS_PATH} 加载 Projector 适配器权重...")
 checkpoint = torch.load(PROJECTOR_WEIGHTS_PATH, map_location="cpu")
 state_dict = {k.replace("mm_projector.", ""): v for k, v in checkpoint.items()}
 model.get_model().mm_projector.load_state_dict(state_dict, strict=True)
+print(f"[Info] Projector 适配器权重加载成功！")
 
+# 挂载设备
 model.get_model().mm_projector.to(dtype=torch.bfloat16, device="cuda")
 model.get_model().vision_tower.to(dtype=torch.float32, device="cuda")
 model.cuda().eval()
 
+# ===== 新增：打印模型加载成功后的总览及维度信息 START =====
+print("\n" + "=" * 60)
+print("🚀 [组件加载成功概览与特征维度说明]")
+print(f"1. 语言模型 (LLM): Qwen3.5-9B")
+print(f"   - 隐藏层维度 (Hidden Size): {model.config.hidden_size}")
+print(f"   - 运行精度: {model.dtype}")
+print(f"2. 视觉编码器 (Vision Tower): CT-CLIP")
+print(f"   - 权重路径: {CT_CLIP_PATH}")
+print(f"   - 预期输入维度: [Batch, Channel(1), Depth(40), Height(480), Width(480)]")
+print(f"   - 预期输出维度: [Batch, Patch_num(2304), Feature_dim({model.config.mm_hidden_size})]")
+print(f"3. 多模态适配器 (Projector): {model.config.mm_projector_type}")
+print(f"   - 预期输入维度: [Batch, 2304, {model.config.mm_hidden_size}]")
+print(f"   - 预期输出维度: [Batch, Output_Tokens(256), LLM_Hidden({model.config.hidden_size})]")
+print("=" * 60 + "\n")
+# ===== 新增：打印模型加载成功后的总览及维度信息 END =====
 
 # 精度桥梁补丁
 def patched_encode_images(self, images):
