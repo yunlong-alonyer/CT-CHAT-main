@@ -259,101 +259,79 @@ bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 # -------------------------------------------------------------------
 # [新增] 核心探针：验证图像数据是否真正在模型内部流通
 # -------------------------------------------------------------------
-print("\n[Debug] --- 开始验证多模态数据流 ---")
+# -------------------------------------------------------------------
+# [Debug & 修复] 提前手动进行多模态特征融合
+# -------------------------------------------------------------------
+print("\n[Debug] --- 开始验证多模态数据流并拼装特征 ---")
 try:
-    # 1. 验证视觉编码器 (Vision Tower) 的信号
-    with torch.no_grad():
-        # 强制对齐你之前设置的 float32
-        test_img = images.to(device="cuda", dtype=torch.float32)
-        vision_out = model.get_model().vision_tower(test_img)
-        print(f"[Debug] 1. 视觉塔特征输出形状: {vision_out.shape}")
-        if torch.isnan(vision_out).any():
-            print("[Error] 🚨 致命：视觉特征中出现 NaN！(可能是预处理越界或精度溢出)")
+    # 1. 强制对齐 Vision Tower 的精度 (float32)，防止内部运算出现 NaN
+    images_f32 = images.to(device="cuda", dtype=torch.float32)
 
-        # 2. 验证适配器 (Projector) 的信号
-        proj_out = model.get_model().mm_projector(vision_out.to(dtype=torch.bfloat16))
-        print(f"[Debug] 2. 适配器特征输出形状: {proj_out.shape}")
-        if proj_out.sum() == 0:
-            print("[Error] 🚨 致命：适配器输出全为 0！(通常是加载了空权重，或维度完全错位)")
-        elif torch.isnan(proj_out).any():
-            print("[Error] 🚨 致命：适配器输出 NaN！")
-
-    # 3. 终极验证：LLaVA 拼接逻辑是否成功替换 Token
+    # 2. 手动调用 LLaVA 的融合函数 (注意这里正确接收 6 个返回值)
     (
-        inputs_embeds,
-        _,
-        _,
-        _,
+        _input_ids,
+        _position_ids,
+        _attention_mask,  # 🚨 这是包含了图像 256 长度后，真正正确的 Mask
+        _past_key_values,
+        inputs_embeds,  # 🚨 这是真正包含图像向量的 Embeddings
+        _labels
     ) = model.prepare_inputs_labels_for_multimodal(
         input_ids=input_ids,
         position_ids=None,
         attention_mask=attention_mask,
         past_key_values=None,
         labels=None,
-        images=images
+        images=images_f32
     )
-    print(f"[Debug] 3. 原始文本 Token 长度: {input_ids.shape[1]}")
-    print(f"[Debug] 3. 融合图像后 Token 长度: {inputs_embeds.shape[1]}")
+
+    print(f"[Debug] 拼装前文本 Token 长度: {input_ids.shape[1]}")
+    print(f"[Debug] 拼装后融合特征长度: {inputs_embeds.shape[1]}")
 
     if inputs_embeds.shape[1] > input_ids.shape[1]:
-        print("[Debug] ✅ 物理通路正常：图像 Token (-200) 已成功被替换为大量视觉特征向量！")
+        print("[Debug] ✅ 物理通路正常：图像 Token 已成功扩展为视觉特征向量！")
     else:
-        print("[Error] ❌ 物理通路断裂：LLaVA 替换图像 Token 失败，大模型收到的依然是纯文本！")
+        print("[Error] ❌ 物理通路断裂：替换失败！")
 
 except Exception as e:
-    print(f"[Error] 🚨 探针执行失败，数据流异常: {e}")
-# -------------------------------------------------------------------
+    print(f"[Error] 🚨 特征融合执行失败: {e}")
+    import traceback
 
-# 执行推理
+    traceback.print_exc()
+
+# ==========================================
+# 2. 核心修改：生成参数 (Greedy Decoding)
+# ==========================================
 print("\n>>> 开始生成文本...")
-# 确保获取到了停止符
-stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
-
-
-from llava.constants import IMAGE_TOKEN_INDEX
-
-# --- 数据流验证 1：Token 层面 ---
-print("\n[Debug] --- 数据流验证 ---")
-# 查找 LLaVA 内部的硬编码图像占位符 -200
-has_image_token = (input_ids == IMAGE_TOKEN_INDEX).any().item()
-print(f"[Debug] Prompt 中是否成功编码了 LLaVA Image Token (-200): {has_image_token}")
-
-if not has_image_token:
-    print("[Error] 警告：你的 input_ids 中没有图像占位符！")
-else:
-    print(f"[Debug] 占位符注入成功！包含 -200 的数量: {(input_ids == IMAGE_TOKEN_INDEX).sum().item()}")
-
-
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
+        # 🚨 关键修复：直接传入 inputs_embeds 和对应的 _attention_mask，废弃 input_ids 和 images
         output_ids = model.generate(
-            input_ids,
-            attention_mask=attention_mask,
-            images=images,
+            inputs_embeds=inputs_embeds,
+            attention_mask=_attention_mask,
             do_sample=False,
-            temperature=0.2,
-            top_p=0.8,
             no_repeat_ngram_size=4,
             pad_token_id=stop_token_id,
-            eos_token_id=stop_token_id,   # 🚨 最关键的一行：一旦模型想输出 <|im_end|>，强制让它停下，不许继续联想！
-            max_new_tokens=2048,
-            use_cache=True,
-            bad_words_ids = bad_words_ids,
+            eos_token_id=stop_token_id,
+            bad_words_ids=bad_words_ids,
+            max_new_tokens=5,
+            use_cache=True
         )
 
-
-
-# 解码
-input_token_len = input_ids.shape[1]
-new_tokens = output_ids[0][input_token_len:].tolist()
+# ==========================================
+# 3. 解码与后处理清洗
+# ==========================================
+# 🚨 核心修改：由于传入的是 inputs_embeds，模型生成的 output_ids 中【只包含】新生成的答案！
+# 不再包含 Prompt 内容，所以绝对不能再做切片（去掉 [input_token_len:] 操作）
+new_tokens = output_ids[0].tolist()
 response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
 
-# 🌟 新增：自动过滤 think 过程
+# 模板残留清理，使用切片而非 lstrip 防止误删选项字母
+if response.startswith("assistant"):
+    response = response[len("assistant"):].strip()
+
 if "</think>" in response:
-    # 按照 </think> 切分，只取后面的正式报告部分
     final_report = response.split("</think>")[-1].strip()
 else:
-    # 如果模型偶尔没按格式输出，就保留原样
     final_report = response
 
 print("\n" + "=" * 50)
