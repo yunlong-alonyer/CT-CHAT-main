@@ -346,7 +346,7 @@ with torch.no_grad():
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
             bad_words_ids=bad_words_ids,
-            max_new_tokens=5,  # 只生成极短的字符（字母）
+            max_new_tokens=256,  # 只生成极短的字符（字母）
             use_cache=True
         )
 
