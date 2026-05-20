@@ -224,7 +224,7 @@ with torch.no_grad():
         inputs_embeds=inputs_embeds,
         attention_mask=_attention_mask,
         do_sample=False,  # 暂时关闭采样，使用贪心策略
-        max_new_tokens=20,  # 只要能吐出 20 个字，证明通了
+        max_new_tokens=512,  # 只要能吐出 20 个字，证明通了
         pad_token_id=stop_token_id,
         eos_token_id=stop_token_id,
         use_cache=True
