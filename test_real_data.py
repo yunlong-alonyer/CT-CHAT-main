@@ -324,10 +324,20 @@ except Exception as e:
 # ==========================================
 # 2. 核心修改：生成参数 (Greedy Decoding)
 # ==========================================
+# ==========================================
+# 2. 核心修改：生成参数 (Greedy Decoding)
+# ==========================================
 print("\n>>> 开始生成文本...")
+
+# 🚨 补充缺失的变量定义
+stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
+bad_words = ["<think>", "</think>", "Thinking Process:", "思考过程", "我理解", "好的"]
+bad_words_ids = [tokenizer.encode(word, add_special_tokens=False) for word in bad_words]
+bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
+
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
-        # 🚨 关键修复：直接传入 inputs_embeds 和对应的 _attention_mask，废弃 input_ids 和 images
+        # 🚨 关键修复：直接传入 inputs_embeds 和对应的 _attention_mask
         output_ids = model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=_attention_mask,
@@ -336,19 +346,18 @@ with torch.no_grad():
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
             bad_words_ids=bad_words_ids,
-            max_new_tokens=5,
+            max_new_tokens=5,  # 只生成极短的字符（字母）
             use_cache=True
         )
 
 # ==========================================
 # 3. 解码与后处理清洗
 # ==========================================
-# 🚨 核心修改：由于传入的是 inputs_embeds，模型生成的 output_ids 中【只包含】新生成的答案！
-# 不再包含 Prompt 内容，所以绝对不能再做切片（去掉 [input_token_len:] 操作）
+# 由于传入的是 inputs_embeds，模型生成的 output_ids 默认只包含回答，无需切片
 new_tokens = output_ids[0].tolist()
 response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
 
-# 模板残留清理，使用切片而非 lstrip 防止误删选项字母
+# 模板残留清理
 if response.startswith("assistant"):
     response = response[len("assistant"):].strip()
 
