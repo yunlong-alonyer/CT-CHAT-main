@@ -1,7 +1,7 @@
 import torch
 
 # 🚨 将这里的路径替换为你刚才生成的最终单独权重文件的实际路径
-weight_path = "/checkpoints/test2/checkpoint-26/mm_projector.bin"
+weight_path = "./checkpoints/test2/checkpoint-26/mm_projector.bin"
 
 
 def check_dims():
