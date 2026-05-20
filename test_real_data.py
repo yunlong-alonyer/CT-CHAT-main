@@ -143,3 +143,6 @@ print("\n" + "=" * 50)
 print("[Qwen3.5 最终模型输出]:")
 print(response)
 print("=" * 50)
+
+print(f"output_ids shape: {output_ids.shape}")
+print(f"raw decode: {tokenizer.decode(output_ids[0], skip_special_tokens=False)}")
