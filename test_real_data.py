@@ -256,6 +256,53 @@ bad_words_ids = [tokenizer.encode(word, add_special_tokens=False) for word in ba
 # 过滤掉可能为空的 encode 结果
 bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 
+# -------------------------------------------------------------------
+# [新增] 核心探针：验证图像数据是否真正在模型内部流通
+# -------------------------------------------------------------------
+print("\n[Debug] --- 开始验证多模态数据流 ---")
+try:
+    # 1. 验证视觉编码器 (Vision Tower) 的信号
+    with torch.no_grad():
+        # 强制对齐你之前设置的 float32
+        test_img = images.to(device="cuda", dtype=torch.float32)
+        vision_out = model.get_model().vision_tower(test_img)
+        print(f"[Debug] 1. 视觉塔特征输出形状: {vision_out.shape}")
+        if torch.isnan(vision_out).any():
+            print("[Error] 🚨 致命：视觉特征中出现 NaN！(可能是预处理越界或精度溢出)")
+
+        # 2. 验证适配器 (Projector) 的信号
+        proj_out = model.get_model().mm_projector(vision_out.to(dtype=torch.bfloat16))
+        print(f"[Debug] 2. 适配器特征输出形状: {proj_out.shape}")
+        if proj_out.sum() == 0:
+            print("[Error] 🚨 致命：适配器输出全为 0！(通常是加载了空权重，或维度完全错位)")
+        elif torch.isnan(proj_out).any():
+            print("[Error] 🚨 致命：适配器输出 NaN！")
+
+    # 3. 终极验证：LLaVA 拼接逻辑是否成功替换 Token
+    (
+        inputs_embeds,
+        _,
+        _,
+        _,
+    ) = model.prepare_inputs_labels_for_multimodal(
+        input_ids=input_ids,
+        position_ids=None,
+        attention_mask=attention_mask,
+        past_key_values=None,
+        labels=None,
+        images=images
+    )
+    print(f"[Debug] 3. 原始文本 Token 长度: {input_ids.shape[1]}")
+    print(f"[Debug] 3. 融合图像后 Token 长度: {inputs_embeds.shape[1]}")
+
+    if inputs_embeds.shape[1] > input_ids.shape[1]:
+        print("[Debug] ✅ 物理通路正常：图像 Token (-200) 已成功被替换为大量视觉特征向量！")
+    else:
+        print("[Error] ❌ 物理通路断裂：LLaVA 替换图像 Token 失败，大模型收到的依然是纯文本！")
+
+except Exception as e:
+    print(f"[Error] 🚨 探针执行失败，数据流异常: {e}")
+# -------------------------------------------------------------------
 
 # 执行推理
 print("\n>>> 开始生成文本...")
