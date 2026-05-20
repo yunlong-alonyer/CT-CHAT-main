@@ -230,11 +230,11 @@ model.eval()
 
 # 这行代码会去字典里拿到你上面配好的 conv_qwen 模板
 conv = conv_templates["qwen"].copy()
-conv.system = "你是一个专业的医疗AI助手CT-CHAT。请严格按照指令直接回答，严禁输出任何分析、推理、思考过程或包含'<think>'的内容。"
+conv.system = "你是一个专业的医疗AI助手CT-CHAT。请直接根据提供的CT影像作答"
 # 填入用户的问题（带上图片占位符）
 #raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告只包含‘影像所见’和‘影像所得’。"
 #raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，作为专业的放射科医生，请解读这份CT影像，提供影像所见及结论"
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n以当前的指令为准，根据前文的医学特征提示，该扫描部位属于：A.胸部 B.头部 C.腹部。请直接输出字母选项（不要输出任何解释或思考过程）："
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据影像特征，该扫描部位属于：A.胸部 B.头部 C.腹部。\n【指令】：直接且仅输出一个代表选项的大写字母，严禁任何问候、解释、分析或思考过程。"
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
@@ -283,7 +283,7 @@ with torch.no_grad():
             input_ids,
             attention_mask=attention_mask,
             images=images,
-            do_sample=True,
+            do_sample=False,
             temperature=0.2,
             top_p=0.8,
             no_repeat_ngram_size=4,
