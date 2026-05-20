@@ -192,51 +192,53 @@ bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
 
 # =========================================================================
-# 5. 组装变长特征与自回归生成
+# 5. 组装变长特征与自回归生成 (增强版)
 # =========================================================================
-print("\n[Debug] 正在底层拼装多模态特征并修复 Attention Mask...")
+print("\n[Debug] 正在拼装特征...")
 images_f32 = images.to(device="cuda", dtype=torch.float32)
 
-(
-    _input_ids,
-    _position_ids,
-    _attention_mask,
-    _past_key_values,
-    inputs_embeds,
-    _labels
-) = model.prepare_inputs_labels_for_multimodal(
-    input_ids=input_ids,
-    position_ids=None,
-    attention_mask=attention_mask,
-    past_key_values=None,
-    labels=None,
-    images=images_f32
-)
-
-# 获取输入嵌入的长度，以便后面减掉回显
-input_len = inputs_embeds.shape[1]
-
-print("\n>>> 开始基于修复后特征的推理...")
 with torch.no_grad():
-    with torch.amp.autocast('cuda', enabled=False):
-        # 🚨 使用 output_scores 或直接截取生成部分
-        output_ids = model.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=_attention_mask,
-            do_sample=True,
-            temperature=0.2,
-            top_p=0.9,
-            pad_token_id=stop_token_id,
-            eos_token_id=stop_token_id,
-            bad_words_ids=bad_words_ids,
-            max_new_tokens=256,
-            use_cache=True
-        )
+    # 显式使用 prepare_inputs_labels_for_multimodal
+    (
+        _input_ids, _position_ids, _attention_mask,
+        _past_key_values, inputs_embeds, _labels
+    ) = model.prepare_inputs_labels_for_multimodal(
+        input_ids=input_ids,
+        position_ids=None,
+        attention_mask=attention_mask,
+        past_key_values=None,
+        labels=None,
+        images=images_f32
+    )
+
+    print(f"[Debug] Embeddings 形状: {inputs_embeds.shape}, 设备: {inputs_embeds.device}")
+
+    # 强制进行一次简易的前向推理，检查是否会报错
+    print("[Debug] 正在进行前向测试...")
+    logits = model(inputs_embeds=inputs_embeds, attention_mask=_attention_mask).logits
+    print(f"[Debug] Logits 输出形状: {logits.shape} (模型已处理完所有 Token)")
+
+    # 开始生成
+    print("\n>>> 开始正式推理...")
+    output_ids = model.generate(
+        inputs_embeds=inputs_embeds,
+        attention_mask=_attention_mask,
+        do_sample=False,  # 暂时关闭采样，使用贪心策略
+        max_new_tokens=20,  # 只要能吐出 20 个字，证明通了
+        pad_token_id=stop_token_id,
+        eos_token_id=stop_token_id,
+        use_cache=True
+    )
 
 # =========================================================================
-# 6. 后处理与输出 (修正切片逻辑)
+# 6. 解码与输出
 # =========================================================================
-# 🚨 如果输出里包含了输入的 Prompt，说明 generate 开启了回显
-# 我们减去输入的 inputs_embeds 长度 (input_len)
-new_tokens = output_ids[0][input_len:].tolist()
-response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
+# 直接从生成的全部 sequences 中取出生成的回答部分
+# 因为我们使用了 inputs_embeds 喂入，部分版本的 generate 会返回完整序列
+generated_tokens = output_ids[0]
+response = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+
+print("\n" + "=" * 50)
+print("[Qwen3.5 最终模型输出]:")
+print(response)
+print("=" * 50)
