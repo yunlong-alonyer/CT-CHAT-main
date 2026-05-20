@@ -184,7 +184,7 @@ print("[*] 挂载视觉塔与适配器...")
 model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
-PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector_34500_2/checkpoint-7757/mm_projector.bin"
+PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector_34500_2/checkpoint-15514/mm_projector.bin"
 #PROJECTOR_WEIGHTS_PATH =  ""
 # ==========================================
 # 修改 test_real_data.py 中加载适配器权重的部分
@@ -288,71 +288,88 @@ bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 # =========================================================================
 # [核心修复] 动态补丁：在视觉塔和适配器之间架设精度转换桥梁
 # =========================================================================
+# =========================================================================
+# [核心修复 1] 动态补丁：架设精度转换桥梁
+# =========================================================================
 import types
-
-
 def patched_encode_images(self, images):
-    # 强制转换为 float32 给 Vision Tower，防止卷积层出现 NaN
     images_f32 = images.to(dtype=torch.float32)
     image_features = self.get_model().get_vision_tower()(images_f32)
-
-    # 强制转换为 bfloat16 给 Projector，迎合 LLM 精度，防止 einsum 崩溃
     image_features = image_features.to(dtype=torch.bfloat16)
     image_features = self.get_model().mm_projector(image_features)
-
     return image_features
 
-
-# 将打好补丁的方法强制绑定给当前模型
 model.encode_images = types.MethodType(patched_encode_images, model)
-# =========================================================================
 
-# 1. 调整对话模板与 Prompt（降级为基础描述任务，测试视力）
+# =========================================================================
+# [核心修复 2] 屏蔽词与对话模板设置
+# =========================================================================
 conv = conv_templates["qwen"].copy()
-conv.system = "你是一个专业的医疗AI助手CT-CHAT。请仔细观察提供的CT影像并作答。"
-# 🚨 关键：放弃选择题，用最泛化的描述指令，避免触发模型的“做题抗拒”
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n这是一张CT影像，请简要告诉我你在影像中看到了什么器官或组织？"
+conv.system = "你是一个专业的医疗AI助手CT-CHAT。请直接描述影像内容，不要输出任何思考过程或解释语。"
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n这是一张CT影像，请简要告诉我你在影像中看到了什么？"
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
 prompt = conv.get_prompt()
 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
-
 attention_mask = torch.ones_like(input_ids).cuda()
+
+bad_words = ["<think>", "</think>", "Thinking Process:", "思考过程"]
+bad_words_ids = [tokenizer.encode(word, add_special_tokens=False) for word in bad_words]
+bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
 
-print("\n>>> 开始原生多模态生成 (测试视觉感知)...")
+# =========================================================================
+# [核心修复 3] 强行手动拉长多模态 Token 与 Attention Mask
+# =========================================================================
+print("\n[Debug] 正在拼装特征并修正 Attention Mask...")
+images_f32 = images.to(device="cuda", dtype=torch.float32)
+(
+    _input_ids,
+    _position_ids,
+    _attention_mask,     # 🚨 拿到了长度为 328 的正确掩码！
+    _past_key_values,
+    inputs_embeds,       # 🚨 拿到了 328 个真实的向量！
+    _labels
+) = model.prepare_inputs_labels_for_multimodal(
+    input_ids=input_ids,
+    position_ids=None,
+    attention_mask=attention_mask,
+    past_key_values=None,
+    labels=None,
+    images=images_f32
+)
+
+# =========================================================================
+# [核心修复 4] 基于修正后的特征执行推理
+# =========================================================================
+print("\n>>> 开始基于修复后特征的推理...")
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
-        # 🚨 回归最干净的原生 generate 调用
-        # 因为上面的 patched_encode_images 已经解决了精度崩溃，现在原生 generate 可以畅通无阻了
         output_ids = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            images=images,  # 交给底层 forward 自己去融合
-            do_sample=True,  # 开启一定发散度
-            temperature=0.4,
+            inputs_embeds=inputs_embeds,       # 直接喂特征
+            attention_mask=_attention_mask,    # 直接喂修复好的变长 Mask
+            do_sample=True,
+            temperature=0.2,
             top_p=0.9,
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
-            max_new_tokens=256,  # 允许模型详细描述
+            bad_words_ids=bad_words_ids,       # 强制压制 <think>
+            max_new_tokens=256,
             use_cache=True
         )
 
-# 解码与后处理
-input_token_len = input_ids.shape[1]
-new_tokens = output_ids[0][input_token_len:].tolist()
+# =========================================================================
+# [核心修复 5] 解码与输出
+# =========================================================================
+# 由于喂入的是 inputs_embeds，生成的只有答案，直接解码即可
+new_tokens = output_ids[0].tolist()
 response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
 
 if response.startswith("assistant"):
     response = response[len("assistant"):].strip()
 
-if "</think>" in response:
-    final_report = response.split("</think>")[-1].strip()
-else:
-    final_report = response
-
 print("\n" + "=" * 50)
 print("[Qwen3.5 最终报告输出]:")
-print(final_report)
+print(response)
 print("=" * 50)
