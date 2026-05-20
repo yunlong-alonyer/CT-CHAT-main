@@ -111,6 +111,38 @@ input_ids = tokenizer_image_token(conv.get_prompt(), tokenizer, IMAGE_TOKEN_INDE
 images = process_nii_for_v2(NII_PATH)
 
 print("\n[Debug] 正在拼装特征...")
+
+# ===== 新增诊断代码 START =====
+with torch.no_grad():
+    # 第一步：验证 CT-CLIP 视觉特征
+    images_f32 = images.to(dtype=torch.float32)
+    vision_features = model.get_model().get_vision_tower()(images_f32)
+    print(f"Vision features shape: {vision_features.shape}")
+    print(f"Vision features mean: {vision_features.mean():.4f}")
+    print(f"Vision features std: {vision_features.std():.4f}")
+    print(f"Vision features min/max: {vision_features.min():.4f} / {vision_features.max():.4f}")
+
+    # 第二步：验证 projector 输出
+    proj_features = model.get_model().mm_projector(vision_features.to(dtype=torch.bfloat16))
+    print(f"Projector output shape: {proj_features.shape}")
+    print(f"Projector output std: {proj_features.std():.4f}")
+    print(f"Projector output mean: {proj_features.mean():.4f}")
+
+# 第三步：纯文字推理对比
+text_only = "这是一张CT影像，请简要告诉我你在影像中看到了什么器官或组织？"
+text_ids = tokenizer(text_only, return_tensors='pt').input_ids.cuda()
+with torch.no_grad():
+    text_embeds = model.get_model().embed_tokens(text_ids)
+    output_text_only = model.generate(
+        inputs_embeds=text_embeds,
+        max_new_tokens=128,
+        do_sample=False,
+        eos_token_id=tokenizer.convert_tokens_to_ids("<|im_end|>")
+    )
+print("纯文字输出:", tokenizer.decode(output_text_only[0], skip_special_tokens=True))
+# ===== 新增诊断代码 END =====
+
+
 with torch.no_grad():
     (
         _input_ids, _position_ids, _attention_mask,
