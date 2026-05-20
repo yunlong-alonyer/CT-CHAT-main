@@ -192,33 +192,14 @@ bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
 stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
 
 # =========================================================================
-# 5. 组装变长特征与自回归生成 (正式推理配置)
+# 5. 组装变长特征与自回归生成 (增强版：强制截断回显)
 # =========================================================================
-print("\n[Debug] 正在拼装特征...")
-images_f32 = images.to(device="cuda", dtype=torch.float32)
-
-# 🚨 关键：必须执行这一步拼装，否则没有 inputs_embeds
-(
-    _input_ids,
-    _position_ids,
-    _attention_mask,
-    _past_key_values,
-    inputs_embeds,
-    _labels
-) = model.prepare_inputs_labels_for_multimodal(
-    input_ids=input_ids,
-    position_ids=None,
-    attention_mask=attention_mask,
-    past_key_values=None,
-    labels=None,
-    images=images_f32
-)
-
 print("\n>>> 开始正式推理...")
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
+        # 增加 output_scores 和 return_dict_in_generate 帮助调试
         output_ids = model.generate(
-            inputs_embeds=inputs_embeds,  # 现在这个变量有值了
+            inputs_embeds=inputs_embeds,
             attention_mask=_attention_mask,
             do_sample=True,
             temperature=0.2,
@@ -226,25 +207,35 @@ with torch.no_grad():
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
             bad_words_ids=bad_words_ids,
-            max_new_tokens=512,
-            use_cache=True
+            max_new_tokens=256,
+            use_cache=True,
+            return_dict_in_generate=True, # 🚨 关键：获取详细的生成结果结构
+            output_scores=False
         )
 
 # =========================================================================
-# 6. 后处理与输出 (清理 <think> 标签残留)
+# 6. 后处理与输出 (使用 output_ids.sequences)
 # =========================================================================
-generated_tokens = output_ids[0]
-response = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+# model.generate 返回的是一个包含 sequences 的对象
+generated_sequences = output_ids.sequences[0]
 
-# 彻底清理 <think> 标签及其中间内容
+# 核心逻辑：计算输入的特征序列长度
+# 我们的 input_ids 原始长度是 73，经过拼接后的 Embeddings 序列长度是 308
+# 这里的 308 就是所谓的 "input_len"
+input_len = inputs_embeds.shape[1]
+
+# 🚨 强制切片：只取输入长度之后生成的 Token
+new_tokens = generated_sequences[input_len:].tolist()
+
+response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+# 清理残留
 import re
 response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-
-# 如果有 assistant 字样残留
 if response.startswith("assistant"):
     response = response[len("assistant"):].strip()
 
 print("\n" + "=" * 50)
 print("[Qwen3.5 最终模型输出]:")
-print(response)
+print(response if response else "模型输出了空内容，可能在拼装特征后立即结束了推理。")
 print("=" * 50)
