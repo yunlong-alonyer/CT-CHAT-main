@@ -136,13 +136,11 @@ with torch.no_grad():
         use_cache=True
     )
 
-response = tokenizer.decode(output_ids[0][inputs_embeds.shape[1]:], skip_special_tokens=True).strip()
+# 修复解码部分
+response = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
 response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
 
 print("\n" + "=" * 50)
 print("[Qwen3.5 最终模型输出]:")
 print(response)
 print("=" * 50)
-
-print(f"output_ids shape: {output_ids.shape}")
-print(f"raw decode: {tokenizer.decode(output_ids[0], skip_special_tokens=False)}")
