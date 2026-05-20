@@ -194,19 +194,39 @@ stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
 # =========================================================================
 # 5. 组装变长特征与自回归生成 (正式推理配置)
 # =========================================================================
+print("\n[Debug] 正在拼装特征...")
+images_f32 = images.to(device="cuda", dtype=torch.float32)
+
+# 🚨 关键：必须执行这一步拼装，否则没有 inputs_embeds
+(
+    _input_ids,
+    _position_ids,
+    _attention_mask,
+    _past_key_values,
+    inputs_embeds,
+    _labels
+) = model.prepare_inputs_labels_for_multimodal(
+    input_ids=input_ids,
+    position_ids=None,
+    attention_mask=attention_mask,
+    past_key_values=None,
+    labels=None,
+    images=images_f32
+)
+
 print("\n>>> 开始正式推理...")
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
         output_ids = model.generate(
-            inputs_embeds=inputs_embeds,
+            inputs_embeds=inputs_embeds,  # 现在这个变量有值了
             attention_mask=_attention_mask,
             do_sample=True,
-            temperature=0.2,       # 适当调低温度保证医疗报告的确定性
+            temperature=0.2,
             top_p=0.9,
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
             bad_words_ids=bad_words_ids,
-            max_new_tokens=512,    # 🚨 将此处改为 512，允许输出完整报告
+            max_new_tokens=512,
             use_cache=True
         )
 
