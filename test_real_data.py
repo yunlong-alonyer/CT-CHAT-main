@@ -224,6 +224,29 @@ model.get_model().vision_tower.to(dtype=torch.float32, device="cuda")
 model.cuda()
 model.eval()
 
+# =========================================================================
+# [核心修复] 动态补丁：在视觉塔和适配器之间架设精度转换桥梁
+# =========================================================================
+import types
+
+
+def patched_encode_images(self, images):
+    # 1. 经过 Vision Tower (此时图像特征还是 float32)
+    image_features = self.get_model().get_vision_tower()(images)
+
+    # 2. 🚨 核心转换：强制将特征转换为 bfloat16，迎合 mm_projector 和 LLM
+    image_features = image_features.to(dtype=torch.bfloat16)
+
+    # 3. 经过 Projector (安全通过)
+    image_features = self.get_model().mm_projector(image_features)
+
+    return image_features
+
+
+# 将打好补丁的方法强制绑定给当前模型
+model.encode_images = types.MethodType(patched_encode_images, model)
+# =========================================================================
+
 # 准备文本输入
 #prompt = f" {DEFAULT_IMAGE_TOKEN}\n提示词：前面的是一段经过3d编码器的CT图像。请简单告诉我你看到了什么。"
 #prompt = f" {DEFAULT_IMAGE_TOKEN}\n 这是一个患者的CT影像，生成一份详细的医疗报告。"
