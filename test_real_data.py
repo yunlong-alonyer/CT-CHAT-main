@@ -197,7 +197,6 @@ stop_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else 151645
 print("\n[Debug] 正在底层拼装多模态特征并修复 Attention Mask...")
 images_f32 = images.to(device="cuda", dtype=torch.float32)
 
-# 手动拿回完整的 inputs_embeds 和对应的真实变长 mask
 (
     _input_ids,
     _position_ids,
@@ -214,9 +213,13 @@ images_f32 = images.to(device="cuda", dtype=torch.float32)
     images=images_f32
 )
 
+# 获取输入嵌入的长度，以便后面减掉回显
+input_len = inputs_embeds.shape[1]
+
 print("\n>>> 开始基于修复后特征的推理...")
 with torch.no_grad():
     with torch.amp.autocast('cuda', enabled=False):
+        # 🚨 使用 output_scores 或直接截取生成部分
         output_ids = model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=_attention_mask,
@@ -226,21 +229,14 @@ with torch.no_grad():
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,
             bad_words_ids=bad_words_ids,
-            max_new_tokens=256,   # 若用选择题模式，可改为 max_new_tokens=5
+            max_new_tokens=256,
             use_cache=True
         )
 
 # =========================================================================
-# 6. 后处理与输出
+# 6. 后处理与输出 (修正切片逻辑)
 # =========================================================================
-# 由于喂入的是 inputs_embeds，生成的只有回答文本，不再需要切片
-new_tokens = output_ids[0].tolist()
+# 🚨 如果输出里包含了输入的 Prompt，说明 generate 开启了回显
+# 我们减去输入的 inputs_embeds 长度 (input_len)
+new_tokens = output_ids[0][input_len:].tolist()
 response = tokenizer.decode([t for t in new_tokens if t >= 0], skip_special_tokens=True).strip()
-
-if response.startswith("assistant"):
-    response = response[len("assistant"):].strip()
-
-print("\n" + "=" * 50)
-print("[Qwen3.5 最终模型输出]:")
-print(response)
-print("=" * 50)
