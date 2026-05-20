@@ -63,7 +63,8 @@ def process_nii_for_v2(nii_path):
 # 2. 模型初始化
 # =========================================================================
 QWEN_DIR = "../../model/Qwen3.5-9B"
-CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
+#CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
+CT_CLIP_PATH = "./CT_CLIP_PATH =/CT-CLIP_v2.pt"
 PROJECTOR_WEIGHTS_PATH = "./checkpoints/test2/checkpoint-26/mm_projector.bin"
 NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10053105940002/CT163369_1090606624_02_HeadRoutine_Seq.nii.gz"
 
