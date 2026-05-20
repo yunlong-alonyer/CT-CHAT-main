@@ -65,7 +65,7 @@ class AttentionalPoolProjector(nn.Module):
         embed_dim = getattr(config, "hidden_size", 4096)
         # 显式指定：如果配置里没写，就默认 768 (CT-CLIP v2)
         #context_dim = getattr(config, "mm_hidden_size", 768)
-        context_dim = 512
+        context_dim = 768
 
         self.attn_pool = AttentionalPooler(d_model=embed_dim, context_dim=context_dim, n_head=n_head,
                                            n_queries=n_queries)
