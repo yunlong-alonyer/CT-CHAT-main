@@ -142,7 +142,7 @@ class LlavaMetaForCausalLM(ABC):
 
     def encode_images(self, images):
         # 1. 先让图像经过 CT-CLIP 视觉塔提取特征
-        # 这会返回我们在上一步修改过的 shape 为 [Batch, N, 768] 的特征
+        # 这会返回我们在上一步修改过的 shape 为 [Batch, N, 512] 的特征
         image_features = self.get_model().get_vision_tower()(images)
 
         # 2. 将提取出的特征输入给适配器 (Projector) 进行对齐

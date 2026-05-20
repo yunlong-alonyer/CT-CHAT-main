@@ -17,7 +17,7 @@ class AttentionalPooler(nn.Module):
         self.heads = n_head
         inner_dim = dim_head * n_head
 
-        # 核心：这里的 context_dim 必须是 768
+        # 核心：这里的 context_dim 必须是 512
         self.ln_k = nn.LayerNorm(context_dim)
         self.ln_q = nn.LayerNorm(d_model)
 
@@ -29,14 +29,25 @@ class AttentionalPooler(nn.Module):
         if x.ndim == 3:
             x = rearrange(x, 'b n d -> b 1 n d')
 
-        # 此时 x 的形状是 [B, 1, 1568, 768]
+        # 此时 x 的形状是 [B, 1, 1568, 512]
         q = repeat(self.query, 'n d -> b m n d', b=x.shape[0], m=x.shape[1])
 
-        # --- 如果维度还是不对，这里加一个硬拦截强制对齐 ---
-        if x.shape[-1] != self.ln_k.normalized_shape[0]:
-            # 这种情况说明 config 传错了，我们在这里通过代码纠正
-            self.ln_k = nn.LayerNorm(x.shape[-1]).to(x.device, x.dtype)
-            self.to_kv = nn.Linear(x.shape[-1], self.to_kv.out_features, bias=False).to(x.device, x.dtype)
+        # 🚨 [修改点] 增加严格的维度安全检查机制
+        expected_dim = self.ln_k.normalized_shape[0]
+        actual_dim = x.shape[-1]
+
+        if actual_dim != expected_dim:
+            raise ValueError(
+                f"\n{'=' * 60}\n"
+                f"🚨 [致命错误] 视觉特征维度不匹配！\n"
+                f"适配器(Projector)的权重是基于 {expected_dim} 维训练的，\n"
+                f"但当前视觉编码器(Vision Tower)传入的特征却是 {actual_dim} 维。\n\n"
+                f"继续运行会导致预训练权重被随机丢弃！\n"
+                f"👉 解决办法：\n"
+                f"1. 检查推理/训练脚本中的 'mm_hidden_size' 是否设置为 {actual_dim}。\n"
+                f"2. 确保你加载的 projector.bin 是基于 {actual_dim} 维重新训练出来的。\n"
+                f"{'=' * 60}\n"
+            )
 
         x = self.ln_k(x)
         q = self.ln_q(q)
@@ -63,9 +74,9 @@ class AttentionalPoolProjector(nn.Module):
         super().__init__()
         # Qwen 3.5 维度是 4096
         embed_dim = getattr(config, "hidden_size", 4096)
-        # 显式指定：如果配置里没写，就默认 768 (CT-CLIP v2)
-        #context_dim = getattr(config, "mm_hidden_size", 768)
-        #context_dim = 768
+        # 显式指定：如果配置里没写，就默认 512 (CT-CLIP v2)
+        #context_dim = getattr(config, "mm_hidden_size", 512)
+        #context_dim = 512
         context_dim = getattr(config, "mm_hidden_size", 512)
         self.attn_pool = AttentionalPooler(d_model=embed_dim, context_dim=context_dim, n_head=n_head,
                                            n_queries=n_queries)

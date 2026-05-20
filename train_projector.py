@@ -253,7 +253,7 @@ def main():
         "mm_vision_tower": "ctclip",
         "vision_tower_path": CT_CLIP_PATH,
         "mm_projector_type": "coca_pooler",
-        "mm_hidden_size": 768,
+        "mm_hidden_size": 512,
         "hidden_size": 4096,
         "image_token_id": 248056,
     }
