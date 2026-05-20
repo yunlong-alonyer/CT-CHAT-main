@@ -230,11 +230,11 @@ model.eval()
 
 # 这行代码会去字典里拿到你上面配好的 conv_qwen 模板
 conv = conv_templates["qwen"].copy()
-
+conv.system = "你是一个专业的医疗AI助手CT-CHAT。请严格按照指令直接回答，严禁输出任何分析、推理、思考过程或包含'<think>'的内容。"
 # 填入用户的问题（带上图片占位符）
 #raw_text = f"{DEFAULT_IMAGE_TOKEN}\n提示词：这是一个患者的CT影像，生成一份医疗报告只包含‘影像所见’和‘影像所得’。"
 #raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，作为专业的放射科医生，请解读这份CT影像，提供影像所见及结论"
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n根据前文的医学特征提示，该扫描部位属于：A.胸部 B.头部 C.腹部。请直接输出字母选项："
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n以当前的指令为准，根据前文的医学特征提示，该扫描部位属于：A.胸部 B.头部 C.腹部。请直接输出字母选项（不要输出任何解释或思考过程）："
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
@@ -248,6 +248,15 @@ print(f"[*] 正在预处理 NIfTI 影像...")
 images = process_nii_for_v2(NII_PATH)
 print(f"[*] 预处理完成，张量形状: {images.shape}，精度: {images.dtype}")
 attention_mask = torch.ones_like(input_ids).cuda()
+
+# 强制模型在生成时遇到这些词的概率降为 0
+bad_words = ["<think>", "</think>", "Thinking Process:", "思考过程"]
+bad_words_ids = [tokenizer.encode(word, add_special_tokens=False) for word in bad_words]
+
+# 过滤掉可能为空的 encode 结果
+bad_words_ids = [ids for ids in bad_words_ids if len(ids) > 0]
+
+
 # 执行推理
 print("\n>>> 开始生成文本...")
 # 确保获取到了停止符
@@ -281,7 +290,8 @@ with torch.no_grad():
             pad_token_id=stop_token_id,
             eos_token_id=stop_token_id,   # 🚨 最关键的一行：一旦模型想输出 <|im_end|>，强制让它停下，不许继续联想！
             max_new_tokens=2048,
-            use_cache=True
+            use_cache=True,
+            bad_words_ids = bad_words_ids,
         )
 
 
