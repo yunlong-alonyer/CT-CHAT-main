@@ -102,7 +102,7 @@ model.encode_images = types.MethodType(patched_encode_images, model)
 # =========================================================================
 conv = conv_templates["qwen"].copy()
 conv.system = "你是一个专业的医疗AI助手CT-CHAT。"
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n这是一张CT影像，请简要告诉我你在影像中看到了什么器官或组织？"
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n这是一张CT影像，请用2-3句话简要告诉我你看到了哪些主要器官，不需要写报告格式。"
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
@@ -138,7 +138,12 @@ with torch.no_grad():
 
 # 修复解码部分
 response = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+
+# 过滤 think 块（保留思考，但不输出）
 response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+
+# 同时去掉可能残留的 im_end
+response = response.replace('<|im_end|>', '').strip()
 
 print("\n" + "=" * 50)
 print("[Qwen3.5 最终模型输出]:")
