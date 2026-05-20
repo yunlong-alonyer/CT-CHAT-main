@@ -132,9 +132,9 @@ with torch.no_grad():
 text_only = "这是一张CT影像，请简要告诉我你在影像中看到了什么器官或组织？"
 text_ids = tokenizer(text_only, return_tensors='pt').input_ids.cuda()
 with torch.no_grad():
-    text_embeds = model.get_model().model.embed_tokens(text_ids)
+    # 最保险：让模型自己处理纯文字
     output_text_only = model.generate(
-        inputs_embeds=text_embeds,
+        input_ids=text_ids,
         max_new_tokens=128,
         do_sample=False,
         eos_token_id=tokenizer.convert_tokens_to_ids("<|im_end|>")
