@@ -1,34 +1,14 @@
 import torch
-from transformer_maskgit.ctvit import CTViT
 
-model = CTViT(
-    dim=512, codebook_size=8192, image_size=240,
-    patch_size=20, temporal_patch_size=10,
-    spatial_depth=4, temporal_depth=4,
-    heads=8, dim_head=32, channels=1
-)
+# 1. 加载同学的权重
+ckpt_path = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
+ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-ckpt = torch.load("./checkpoint/CT-CLIP_v2.pt", map_location="cpu", weights_only=False)
-state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
-vision_state_dict = {k.replace('visual_transformer.', ''): v
-                     for k, v in state_dict.items() if k.startswith('visual_transformer.')}
+# 2. 提取 state_dict
+state_dict = ckpt['model'] if 'model' in ckpt else (ckpt['state_dict'] if 'state_dict' in ckpt else ckpt)
 
-msg = model.load_state_dict(vision_state_dict, strict=False)
-
-print("=== Missing (随机初始化) ===")
-for k in msg.missing_keys:
-    print(f"  {k}")
-
-print("\n=== Unexpected (丢弃) ===")
-for k in msg.unexpected_keys:
-    print(f"  {k}")
-
-# 跑一个前向验证编码器能正常工作
-print("\n=== 前向传播验证 ===")
-model.eval()
-dummy = torch.zeros(1, 1, 30, 240, 240)  # [B, C, D, H, W]
-with torch.no_grad():
-    out = model(dummy, return_encoded_tokens=True)
-print(f"输入: {dummy.shape}")
-print(f"输出: {out.shape}")
-print("编码器正常！")
+# 3. 过滤并打印出缺失的那个 Block 到底有什么参数
+print("=== 正在检查同学权重中 enc_spatial_transformer.layers.0 的真实参数 ===")
+for k in state_dict.keys():
+    if 'enc_spatial_transformer.layers.0' in k:
+        print(k)

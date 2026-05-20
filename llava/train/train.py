@@ -994,7 +994,7 @@ class LazySupervisedDataset(Dataset):
 
         # 👇 🚨 严格对齐 5：裁剪/填充的目标尺寸与 -1 填充值 🚨 👇
         # ⚠️ 警告: 如果 480x480x240 导致您的显卡 OOM，请在这里按比例改回 (224, 224, 32) 等尺寸
-        target_shape = (224, 224, 32)
+        target_shape = (480, 480, 40)
         h, w, d = tensor.shape
         dh, dw, dd = target_shape
 

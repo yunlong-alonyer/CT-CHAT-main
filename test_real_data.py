@@ -116,7 +116,7 @@ def process_nii_for_v2(nii_path):
     tensor = torch.tensor(img_data)
 
     # 4. 尺寸对齐与居中裁剪
-    target_shape = (224, 224, 32)  # 严格匹配大模型显存安全的 16 层 。
+    target_shape = (480, 480, 40)  # 严格匹配大模型显存安全的 16 层 。
     h, w, d = tensor.shape
     dh, dw, dd = target_shape
 
@@ -168,7 +168,7 @@ multimodal_cfg = {
     "mm_vision_tower": "ctclip",
     "vision_tower_path": CT_CLIP_PATH,
     "mm_projector_type": "coca_pooler",
-    "mm_hidden_size": 768,
+    "mm_hidden_size": 512,
     "hidden_size": 4096,
     "image_token_id": 248056,
 }
@@ -184,7 +184,7 @@ print("[*] 挂载视觉塔与适配器...")
 model.get_model().vision_tower = build_vision_tower(raw_config)
 model.get_model().mm_projector = build_vision_projector(raw_config)
 
-PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector/epoch_2/mm_projector.bin"
+PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector_34500_2/checkpoint-7757/mm_projector.bin"
 #PROJECTOR_WEIGHTS_PATH =  ""
 # ==========================================
 # 修改 test_real_data.py 中加载适配器权重的部分
