@@ -59,14 +59,14 @@ def process_nii_for_v2(nii_path):
     return tensor.permute(2, 0, 1).unsqueeze(0).unsqueeze(0).cuda().bfloat16()
 
 
-# =========================================================================
+# ======================================================================1===
 # 2. 模型初始化
 # =========================================================================
 QWEN_DIR = "../../model/Qwen3.5-9B"
 CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
-#CT_CLIP_PATH = "./checkpoint/CT-CLIP_v2.pt"
-PROJECTOR_WEIGHTS_PATH = "./checkpoints/test2/checkpoint-26/mm_projector.bin"
-NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/10053105940002/CT163369_1090606624_02_HeadRoutine_Seq.nii.gz"
+#CT_CLIP_PATH = "/mnt/huali/checkpoint/CT-CLIP_v2.pt"
+PROJECTOR_WEIGHTS_PATH = "/mnt/huali/checkpoint_projector_34500_4/checkpoint-485/mm_projector.bin"
+NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/100002300082/000972_1305455278_2_L_SpineRoutine.nii.gz"
 
 print(f"\n[Info] 正在初始化 Tokenizer 和模型配置...")
 tokenizer = AutoTokenizer.from_pretrained(QWEN_DIR, trust_remote_code=True)
@@ -122,14 +122,31 @@ model.encode_images = types.MethodType(patched_encode_images, model)
 # 3. 推理逻辑
 # =========================================================================
 conv = conv_templates["qwen"].copy()
-conv.system = "你是一个专业的医疗AI助手CT-CHAT。"
-raw_text = f"{DEFAULT_IMAGE_TOKEN}\n这是一张CT影像，请用2-3句话简要告诉我你看到了哪些主要器官，不需要写报告格式。"
+conv.system = "你是一个专业的医学影像诊断专家，可以通过传入的图像特征直接看到CT影像。"
+raw_text = f"{DEFAULT_IMAGE_TOKEN}\n作为专业的放射科医生，请解读这份3D CT影像，提供影像所见及结论。"
 conv.append_message(conv.roles[0], raw_text)
 conv.append_message(conv.roles[1], None)
 
+prompt = conv.get_prompt()
+print(f"\n[Debug] 最终送入模型的文本 Prompt:\n{prompt}")
+
 input_ids = tokenizer_image_token(conv.get_prompt(), tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(
     0).cuda()
+
+print("\n[Debug] 正在ccccccccccccc...")
 images = process_nii_for_v2(NII_PATH)
+
+img2 = torch.zeros_like(images)
+img3 = torch.randn_like(images)
+with torch.no_grad():
+    out1 = model.generate(input_ids, images=images, do_sample=False, max_new_tokens=128)
+    out2 = model.generate(input_ids, images=img2, do_sample=False, max_new_tokens=128)
+    out3 = model.generate(input_ids, images=img3, do_sample=False, max_new_tokens=128)
+
+print("真实图：\n"+tokenizer.decode(out1[0][input_ids.shape[1]:],skip_special_tokens=True)+"\n")
+print("全黑图：\n"+tokenizer.decode(out2[0][input_ids.shape[1]:],skip_special_tokens=True)+"\n")
+print("随机图：\n"+tokenizer.decode(out3[0][input_ids.shape[1]:],skip_special_tokens=True))
+
 
 print("\n[Debug] 正在拼装特征...")
 

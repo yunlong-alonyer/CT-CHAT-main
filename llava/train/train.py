@@ -1254,14 +1254,20 @@ def train(attn_implementation=None):
         special_tokens_dict = {}
         if tokenizer.pad_token is None:
             special_tokens_dict["pad_token"] = "<|endoftext|>"
-        # 强制加入思考标签
-        special_tokens_dict["additional_special_tokens"] = ["<think>", "</think>"]
+        # 👇 🚨 核心修改：仅在微调阶段（不单独训练连接层时）扩充 <think> 词表 🚨 👇
+        if not model_args.tune_mm_mlp_adapter:
+            special_tokens_dict["additional_special_tokens"] = ["<think>", "</think>"]
+            print("[INFO] 检测到当前为微调阶段，成功注入 <think> 和 </think> 标签。")
+        else:
+            print("[INFO] 检测到当前为预训练阶段，跳过注入思考标签，保持原始词表以防止 Embedding 冻结冲突。")
 
-        smart_tokenizer_and_embedding_resize(
-            special_tokens_dict=special_tokens_dict,
-            tokenizer=tokenizer,
-            model=model,
-        )
+        # 只有在 special_tokens_dict 不为空时才进行词表大小调整
+        if special_tokens_dict:
+            smart_tokenizer_and_embedding_resize(
+                special_tokens_dict=special_tokens_dict,
+                tokenizer=tokenizer,
+                model=model,
+            )
         if model_args.version in conversation_lib.conv_templates:
             conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
         else:

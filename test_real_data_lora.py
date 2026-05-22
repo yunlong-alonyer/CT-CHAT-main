@@ -155,7 +155,7 @@ def process_nii_for_v2(nii_path):
 # =========================================================================
 
 QWEN_DIR = "../../model/Qwen3.5-9B"
-CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_21000_full.pt"
+CT_CLIP_PATH = "/mnt/huali/ct_dataset_10000/output/CTClip_step_34500_full.pt"
 NII_PATH = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data/100273/_1311313023_5.1_Routine_Chest.nii.gz"
 
 print(f"[*] 加载配置与 Tokenizer...")
@@ -167,7 +167,7 @@ multimodal_cfg = {
     "mm_vision_tower": "ctclip",
     "vision_tower_path": CT_CLIP_PATH,
     "mm_projector_type": "coca_pooler",
-    "mm_hidden_size": 768,
+    "mm_hidden_size": 512,
     "hidden_size": 4096,
     "image_token_id": 248056,
 }

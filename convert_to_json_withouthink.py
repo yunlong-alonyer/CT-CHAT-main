@@ -4,13 +4,13 @@ import os
 import random
 
 csv_path = "/home/huali/code/CT-CLIP-main/CT_CLIP/dataset_10000/train_reports.csv"
-output_json = "dataset_llava_format_10000.json"
+output_json = "dataset_llava_format_10000_nothink.json"
 
-# 1. 读取 CSV 时，直接使用 fillna('') 把所有空单元格替换为空字符串
+# 1. 读取 CSV，fillna('') 确保空值处理
 df = pd.read_csv(csv_path, encoding='utf-8').fillna('')
 json_data = []
 
-
+# 多样化 Prompt，保持原样
 human_prompts = [
     "<image>\n请详细描述该CT的影像学特征，并给出诊断意见。",
     "<image>\n作为专业的放射科医生，请解读这份3D CT影像，提供影像所见及影像所得。",
@@ -69,7 +69,7 @@ for idx, row in df.iterrows():
     if not volume_name.endswith('.nii.gz'):
         continue
 
-    # 提取病人ID文件夹名 (SourceFolder)
+    # 提取病人ID文件夹名
     source_folder = str(row.get('SourceFolder', '')).strip()
 
     # 拼接路径
@@ -82,20 +82,18 @@ for idx, row in df.iterrows():
     findings = str(row.get('影像所见', '')).strip()
     conclusion = str(row.get('影像所得', '')).strip()
 
-    # 3. 拦截器：如果所见和所得全是空的，直接丢弃这条数据
+    # 3. 拦截器：确保有内容
     if not findings and not conclusion:
         continue
 
-    # 4. 组装符合 Qwen 逻辑的回复文本 (加入通用 think 过程)
-    gpt_response = (
-        "<think>\n"
-        "提取3D CT影像特征，分析情况，综合评估病变。\n"
-        "</think>\n\n"
-    )
+    # 4. 直接组装报告文本 (彻底移除 think 标签)
+    report_parts = []
     if findings:
-        gpt_response += f"影像所见：{findings}\n"
+        report_parts.append(f"影像所见：{findings}")
     if conclusion:
-        gpt_response += f"影像所得：{conclusion}"
+        report_parts.append(f"影像所得：{conclusion}")
+
+    gpt_response = "\n\n".join(report_parts)
 
     # 构造 LLaVA 标准对话格式
     item = {
@@ -104,11 +102,11 @@ for idx, row in df.iterrows():
         "conversations": [
             {
                 "from": "human",
-                "value": random.choice(human_prompts) # 每次随机抽取一种问法
+                "value": random.choice(human_prompts)
             },
             {
                 "from": "gpt",
-                "value": gpt_response.strip()
+                "value": gpt_response
             }
         ]
     }
@@ -118,4 +116,4 @@ for idx, row in df.iterrows():
 with open(output_json, 'w', encoding='utf-8') as f:
     json.dump(json_data, f, ensure_ascii=False, indent=2)
 
-print(f"✅ 转换完成！经过清洗，共生成 {len(json_data)} 条数据，已保存至 {output_json}")
+print(f"✅ 转换完成！已剔除 <think> 标签，共生成 {len(json_data)} 条数据，已保存至 {output_json}")
