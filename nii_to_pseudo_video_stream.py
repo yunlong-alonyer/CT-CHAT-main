@@ -13,9 +13,9 @@ WINDOW_MIN = -1000.0
 WINDOW_MAX = 400.0
 DEFAULT_STRIP_COLUMNS = 0
 DEFAULT_MAX_IMAGE_SIDE = 1536
-DEFAULT_VOLUME_ROOT = "/oss/share_data/CT/ct_dataset_eval_260514/ct_dataset_eval_260514_img"
+DEFAULT_VOLUME_ROOT = "/mnt/huali/ct_dataset_10000/pretrain_processed_train_data"
 DEFAULT_INPUT_PATH = DEFAULT_VOLUME_ROOT
-DEFAULT_OUTPUT_IMAGE = "/home/huali/workspace/xly/CTModel/pseudo_video_montage"
+DEFAULT_OUTPUT_IMAGE = "/mnt/huali/ct_dataset_10000/pseudo_video_montage"
 
 
 def parse_args() -> argparse.Namespace:
@@ -230,25 +230,30 @@ def main() -> None:
 
     jobs, is_batch = collect_nifti_jobs(args.input)
 
+    # 单文件处理逻辑
     if not is_batch:
         nifti_path = jobs[0]["nifti_path"]
-        volume = process_nifti_volume(nifti_path, args.window_min, args.window_max)
-        montage = volume_to_montage_image(volume, args.strip_columns, args.window_min, args.window_max)
-        montage = maybe_resize_image(montage, args.max_image_side)
+        try:
+            volume = process_nifti_volume(nifti_path, args.window_min, args.window_max)
+            montage = volume_to_montage_image(volume, args.strip_columns, args.window_min, args.window_max)
+            montage = maybe_resize_image(montage, args.max_image_side)
 
-        output_image = Path(args.output_image)
-        output_image.parent.mkdir(parents=True, exist_ok=True)
-        montage.save(output_image)
+            output_image = Path(args.output_image)
+            output_image.parent.mkdir(parents=True, exist_ok=True)
+            montage.save(output_image)
 
-        if args.save_slices_dir:
-            save_slice_frames(volume, args.save_slices_dir, args.window_min, args.window_max)
+            if args.save_slices_dir:
+                save_slice_frames(volume, args.save_slices_dir, args.window_min, args.window_max)
 
-        print(f"[OK] selected_nifti: {nifti_path}")
-        print(f"[OK] montage saved: {output_image}")
-        if args.save_slices_dir:
-            print(f"[OK] slice frames saved: {args.save_slices_dir}")
+            print(f"[OK] selected_nifti: {nifti_path}")
+            print(f"[OK] montage saved: {output_image}")
+            if args.save_slices_dir:
+                print(f"[OK] slice frames saved: {args.save_slices_dir}")
+        except Exception as e:
+            print(f"[FAILED] Failed to process {nifti_path}: {e}")
         return
 
+    # 批量处理逻辑
     if args.output_dir:
         output_root = Path(args.output_dir)
     else:
@@ -258,26 +263,33 @@ def main() -> None:
 
     print(f"[*] batch cases: {len(jobs)}")
     print(f"[*] batch output dir: {output_root}")
+
     for idx, job in enumerate(jobs, start=1):
         nifti_path = job["nifti_path"]
         rel_dir = job["rel_dir"]
         case_name = job["case_name"]
 
-        volume = process_nifti_volume(nifti_path, args.window_min, args.window_max)
-        montage = volume_to_montage_image(volume, args.strip_columns, args.window_min, args.window_max)
-        montage = maybe_resize_image(montage, args.max_image_side)
+        # 增加 try...except 捕获异常，防止报错导致进程中断
+        try:
+            volume = process_nifti_volume(nifti_path, args.window_min, args.window_max)
+            montage = volume_to_montage_image(volume, args.strip_columns, args.window_min, args.window_max)
+            montage = maybe_resize_image(montage, args.max_image_side)
 
-        case_dir = output_root if rel_dir in {"", "."} else (output_root / rel_dir)
-        case_dir.mkdir(parents=True, exist_ok=True)
-        output_image = case_dir / f"{case_name}.png"
-        montage.save(output_image)
+            case_dir = output_root if rel_dir in {"", "."} else (output_root / rel_dir)
+            case_dir.mkdir(parents=True, exist_ok=True)
+            output_image = case_dir / f"{case_name}.png"
+            montage.save(output_image)
 
-        if args.save_slices_dir:
-            slices_root = Path(args.save_slices_dir)
-            slice_dir = slices_root / rel_dir / case_name if rel_dir not in {"", "."} else slices_root / case_name
-            save_slice_frames(volume, str(slice_dir), args.window_min, args.window_max)
+            if args.save_slices_dir:
+                slices_root = Path(args.save_slices_dir)
+                slice_dir = slices_root / rel_dir / case_name if rel_dir not in {"", "."} else slices_root / case_name
+                save_slice_frames(volume, str(slice_dir), args.window_min, args.window_max)
 
-        print(f"[{idx}/{len(jobs)}] [OK] {nifti_path} -> {output_image}")
+            print(f"[{idx}/{len(jobs)}] [OK] {nifti_path} -> {output_image}")
+
+        except Exception as e:
+            # 捕获错误并输出警告，随后跳过当前文件继续处理下一个
+            print(f"[{idx}/{len(jobs)}] [SKIPPED] {nifti_path} | Error: {e}")
 
 
 if __name__ == "__main__":
