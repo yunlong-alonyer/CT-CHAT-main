@@ -15,12 +15,12 @@ from llava.conversation import conv_templates
 import nibabel as nib
 
 # =========================================================================
-# 1. DICOM 序列读取与预处理函数12
+# 1. DICOM 序列读取与预处理函数111111
 # =========================================================================
 def load_dicom_series(dicom_dir):
     files = [os.path.join(dicom_dir, f) for f in os.listdir(dicom_dir) if os.path.isfile(os.path.join(dicom_dir, f))]
     if not files:
-        raise ValueError(f"在目录 {dicom_dir} 下未找到任何文件！")
+        raise ValueError(f"在目录 {dicom_dir} 下未找到任何文件！")  
 
     slices = []
     for f in files:
